@@ -24,21 +24,34 @@ async function startServer() {
   // Necessário para cookies funcionarem atrás do proxy (Render)
   app.set("trust proxy", 1);
 
+  // Em produção, não deixa subir sem segredos
+  if (ENV.isProduction) {
+    if (!ENV.cookieSecret) {
+      console.error("[ENV] ❌ COOKIE_SECRET não definido em produção. Abortando.");
+      process.exit(1);
+    }
+    if (!ENV.jwtSecret) {
+      console.error("[ENV] ❌ JWT_SECRET não definido em produção. Abortando.");
+      process.exit(1);
+    }
+  }
+
   /* ============================
      Middlewares essenciais
   ============================ */
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-  app.use(
-    cookieParser(ENV.COOKIE_SECRET || "default-secret-change-in-production")
-  );
+  // Cookie parser precisa do segredo correto
+  app.use(cookieParser(ENV.cookieSecret || "dev-cookie-secret"));
 
   /* ============================
      CORS (APENAS PARA API)
      NÃO aplique CORS no site inteiro,
      senão quebra /assets e até o próprio frontend.
   ============================ */
+  const appUrl = process.env.APP_URL || ""; // opcional (ex: https://seuapp.onrender.com)
+
   const corsOptions: cors.CorsOptions = {
     origin: (origin, callback) => {
       // sem origin (curl, apps) -> ok
@@ -47,11 +60,11 @@ async function startServer() {
       // Permite localhost dev
       if (origin.startsWith("http://localhost")) return callback(null, true);
 
-      // Permite qualquer onrender.com do seu app
+      // Permite qualquer onrender.com (útil pra preview/ambientes)
       if (origin.includes(".onrender.com")) return callback(null, true);
 
       // Permite o domínio configurado (se existir)
-      if (ENV.APP_URL && origin.includes(ENV.APP_URL)) return callback(null, true);
+      if (appUrl && origin === appUrl) return callback(null, true);
 
       return callback(new Error("Not allowed by CORS"));
     },
@@ -100,9 +113,9 @@ async function startServer() {
   /* ============================
      START SERVER
   ============================ */
-  const PORT = Number(process.env.PORT) || 10000;
+  const PORT = ENV.port;
 
-  server.listen(PORT, () => {
+  server.listen(PORT, ENV.host, () => {
     console.log("========================================");
     console.log("✅ Servidor rodando");
     console.log("🌐 Porta:", PORT);
