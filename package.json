@@ -4,40 +4,30 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-
   "engines": {
     "node": "22.x"
   },
-
   "scripts": {
     "dev:client": "vite --config client/vite.config.ts",
-
     "build:client": "vite build --config client/vite.config.ts",
-
     "build:server": "esbuild server/_core/index.ts --platform=node --bundle --format=cjs --outfile=dist/index.cjs --external:lightningcss --external:@tailwindcss/vite",
-
     "build": "npm run build:client && npm run build:server",
-
     "start": "NODE_ENV=production node dist/index.cjs",
-
     "check": "tsc --noEmit",
-
     "format": "prettier --write .",
-
-    "db:init": "tsx scripts/init-db.ts",
-
+    "test": "vitest run",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
-
-    "clean": "rimraf dist"
+    "db:init": "tsx scripts/init-db.ts",
+    "db:migrate": "tsx scripts/init-db.ts",
+    "setup": "npm install && npm run db:init && npm run check",
+    "clean": "rimraf dist node_modules/.vite",
+    "worker": "tsx scripts/process-schedules.js --loop"
   },
-
   "dependencies": {
     "@trpc/server": "^10.45.4",
     "@trpc/client": "^10.45.4",
     "@trpc/react-query": "^10.45.4",
-
     "@tanstack/react-query": "^4.36.1",
-
     "axios": "^1.6.8",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
@@ -49,7 +39,6 @@
     "pg": "^8.11.3",
     "superjson": "^2.2.1",
     "zod": "^3.22.4",
-
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "wouter": "^2.12.1",
@@ -57,21 +46,20 @@
     "lucide-react": "^0.344.0",
     "next-themes": "^0.3.0"
   },
-
   "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@vitejs/plugin-react": "^4.2.1",
     "@types/express": "^4.17.21",
     "@types/node": "^20.11.30",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
-
-    "@vitejs/plugin-react": "^4.2.1",
-
     "drizzle-kit": "^0.20.17",
     "esbuild": "^0.20.2",
     "prettier": "^3.2.5",
     "rimraf": "^5.0.5",
     "tsx": "^4.7.2",
     "typescript": "^5.4.2",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "vitest": "^1.4.0"
   }
 }
