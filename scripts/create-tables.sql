@@ -1,7 +1,9 @@
 -- Script de criação das tabelas para o Notifique-Me
 -- PostgreSQL - Render
 
+-- ============================
 -- Criar tipos ENUM
+-- ============================
 DO $$ BEGIN
     CREATE TYPE status AS ENUM ('active', 'suspended', 'expired');
 EXCEPTION
@@ -44,7 +46,16 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
--- Tabela de Tenants (Clientes/Empresas)
+-- ✅ faltava no SQL (existe no Drizzle)
+DO $$ BEGIN
+    CREATE TYPE "deliveryFeedback" AS ENUM ('liked', 'renew', 'disliked');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- ============================
+-- Tabela de Tenants
+-- ============================
 CREATE TABLE IF NOT EXISTS tenants (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -57,7 +68,9 @@ CREATE TABLE IF NOT EXISTS tenants (
     "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- ============================
 -- Tabela de Usuários
+-- ============================
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     "tenantId" INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
@@ -77,17 +90,25 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS "createdByAdminId" INTEGER;
 ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS "passwordHash" TEXT;
 
+-- ============================
 -- Tabela de Grupos
+-- ============================
 CREATE TABLE IF NOT EXISTS groups (
     id SERIAL PRIMARY KEY,
     "tenantId" INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    "createdByAdminId" INTEGER NOT NULL,
     name VARCHAR(255) NOT NULL,
     description TEXT,
     "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
     "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Tabela de Relação Usuário-Grupo
+-- ✅ garantir coluna em bases existentes
+ALTER TABLE IF EXISTS groups ADD COLUMN IF NOT EXISTS "createdByAdminId" INTEGER;
+
+-- ============================
+-- Tabela user_groups
+-- ============================
 CREATE TABLE IF NOT EXISTS user_groups (
     id SERIAL PRIMARY KEY,
     "userId" INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -96,7 +117,9 @@ CREATE TABLE IF NOT EXISTS user_groups (
     UNIQUE("userId", "groupId")
 );
 
+-- ============================
 -- Tabela de Notificações
+-- ============================
 CREATE TABLE IF NOT EXISTS notifications (
     id SERIAL PRIMARY KEY,
     "tenantId" INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -114,7 +137,9 @@ CREATE TABLE IF NOT EXISTS notifications (
     "isActive" BOOLEAN DEFAULT TRUE
 );
 
+-- ============================
 -- Tabela de Agendamentos
+-- ============================
 CREATE TABLE IF NOT EXISTS schedules (
     id SERIAL PRIMARY KEY,
     "tenantId" INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -132,7 +157,9 @@ CREATE TABLE IF NOT EXISTS schedules (
     "lastExecutedAt" TIMESTAMP
 );
 
--- Tabela de Entregas
+-- ============================
+-- Tabela de Entregas (Inbox)
+-- ============================
 CREATE TABLE IF NOT EXISTS deliveries (
     id SERIAL PRIMARY KEY,
     "tenantId" INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -142,10 +169,19 @@ CREATE TABLE IF NOT EXISTS deliveries (
     "deliveredAt" TIMESTAMP,
     "readAt" TIMESTAMP,
     "isRead" BOOLEAN DEFAULT FALSE,
-    "errorMessage" TEXT
+    "errorMessage" TEXT,
+    -- ✅ faltava no SQL (existe no Drizzle)
+    feedback "deliveryFeedback",
+    "feedbackAt" TIMESTAMP
 );
 
+-- ✅ garantir colunas em bases existentes
+ALTER TABLE IF EXISTS deliveries ADD COLUMN IF NOT EXISTS feedback "deliveryFeedback";
+ALTER TABLE IF EXISTS deliveries ADD COLUMN IF NOT EXISTS "feedbackAt" TIMESTAMP;
+
+-- ============================
 -- Tabela de Arquivos
+-- ============================
 CREATE TABLE IF NOT EXISTS files (
     id SERIAL PRIMARY KEY,
     "tenantId" INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -160,10 +196,13 @@ CREATE TABLE IF NOT EXISTS files (
     "isPublic" BOOLEAN
 );
 
+-- ============================
 -- Tabela de Logs
+-- ============================
 CREATE TABLE IF NOT EXISTS logs (
     id SERIAL PRIMARY KEY,
     "tenantId" INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
+    "createdByAdminId" INTEGER,
     "userId" INTEGER REFERENCES users(id) ON DELETE SET NULL,
     action VARCHAR(255) NOT NULL,
     "entityType" VARCHAR(100),
@@ -172,22 +211,34 @@ CREATE TABLE IF NOT EXISTS logs (
     "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- ✅ garantir coluna em bases existentes
+ALTER TABLE IF EXISTS logs ADD COLUMN IF NOT EXISTS "createdByAdminId" INTEGER;
+
+-- ============================
 -- Índices para performance
+-- ============================
 CREATE INDEX IF NOT EXISTS idx_users_tenant ON users("tenantId");
 CREATE INDEX IF NOT EXISTS idx_users_openid ON users("openId");
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+
 CREATE INDEX IF NOT EXISTS idx_groups_tenant ON groups("tenantId");
+
 CREATE INDEX IF NOT EXISTS idx_notifications_tenant ON notifications("tenantId");
 CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications("createdAt");
+
 CREATE INDEX IF NOT EXISTS idx_deliveries_notification ON deliveries("notificationId");
 CREATE INDEX IF NOT EXISTS idx_deliveries_user ON deliveries("userId");
+
 CREATE INDEX IF NOT EXISTS idx_schedules_tenant ON schedules("tenantId");
 CREATE INDEX IF NOT EXISTS idx_schedules_scheduled ON schedules("scheduledFor");
+
 CREATE INDEX IF NOT EXISTS idx_logs_tenant ON logs("tenantId");
 CREATE INDEX IF NOT EXISTS idx_logs_created ON logs("createdAt");
 
--- Comentários nas tabelas
+-- ============================
+-- Comentários
+-- ============================
 COMMENT ON TABLE tenants IS 'Clientes/Empresas que compram licença do sistema';
 COMMENT ON TABLE users IS 'Usuários do sistema (owner, admin, user)';
 COMMENT ON TABLE groups IS 'Grupos de usuários para segmentação de notificações';
