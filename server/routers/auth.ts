@@ -10,6 +10,7 @@ import {
   isValidPassword,
   verifyPassword,
 } from "../_core/password";
+import { COOKIE_NAME } from "@shared/const";
 
 /**
  * Build cookie corretamente para Render (HTTPS)
@@ -64,8 +65,8 @@ export const authRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const cookieName =
-        ENV.sessionCookieName || "app_session_id";
+      // ✅ fonte única do cookie name (mesmo que o sdk lê)
+      const cookieName = COOKIE_NAME;
 
       const openId = input.loginId.trim().toLowerCase();
 
@@ -80,8 +81,7 @@ export const authRouter = router({
       if (!isValidPassword(input.password)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message:
-            "Senha inválida. Use letras, números e caracteres ; . _ -",
+          message: "Senha inválida. Use letras, números e caracteres ; . _ -",
         });
       }
 
@@ -90,10 +90,7 @@ export const authRouter = router({
 
       // Se já existe e tem senha, validar
       if (existing?.passwordHash) {
-        const ok = verifyPassword(
-          input.password,
-          existing.passwordHash
-        );
+        const ok = verifyPassword(input.password, existing.passwordHash);
 
         if (!ok) {
           throw new TRPCError({
@@ -131,14 +128,9 @@ export const authRouter = router({
     }),
 
   logout: protectedProcedure.mutation(async ({ ctx }) => {
-    const cookieName =
-      ENV.sessionCookieName || "app_session_id";
+    const cookieName = COOKIE_NAME;
 
-    ctx.res.setHeader(
-      "Set-Cookie",
-      clearCookie(cookieName)
-    );
-
+    ctx.res.setHeader("Set-Cookie", clearCookie(cookieName));
     return { success: true };
   }),
 
