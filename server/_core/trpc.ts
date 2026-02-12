@@ -13,38 +13,43 @@ const t = initTRPC.context<TrpcContext>().create({
 export const router = t.router;
 export const publicProcedure = t.procedure;
 
-function getUser(ctx: any) {
-  return ctx?.user ?? ctx?.session?.user ?? ctx?.auth?.user ?? null;
-}
-
-function getRole(ctx: any): string | undefined {
-  const u = getUser(ctx);
-  return u?.role ?? ctx?.session?.role ?? ctx?.user?.role;
-}
-
-export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
-  const user = getUser(ctx);
+/**
+ * Fonte única de autenticação:
+ * - ctx.user (setado no createContext via sdk.authenticateRequest)
+ */
+function requireUser(ctx: TrpcContext) {
+  const user = ctx.user;
   if (!user) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: "UNAUTHED" });
   }
-  (ctx as any).user = user;
+  return user;
+}
+
+export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+  // garante que ctx.user existe
+  requireUser(ctx);
   return next({ ctx });
 });
 
 export const adminOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
-  const role = getRole(ctx);
-  if (role !== "admin") {
+  const user = requireUser(ctx);
+
+  // ✅ owner normalmente pode tudo que admin pode
+  if (user.role !== "admin" && user.role !== "owner") {
     throw new TRPCError({ code: "FORBIDDEN", message: "ADMIN_ONLY" });
   }
-  return next();
+
+  return next({ ctx });
 });
 
 export const ownerOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
-  const role = getRole(ctx);
-  if (role !== "owner") {
+  const user = requireUser(ctx);
+
+  if (user.role !== "owner") {
     throw new TRPCError({ code: "FORBIDDEN", message: "OWNER_ONLY" });
   }
-  return next();
+
+  return next({ ctx });
 });
 
 // Aliases de compatibilidade (seu projeto importa esses nomes)
