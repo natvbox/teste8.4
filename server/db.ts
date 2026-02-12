@@ -8,7 +8,7 @@ import { ensureSchema } from "./_core/ensureSchema";
 let _db: ReturnType<typeof drizzle> | null = null;
 let _client: ReturnType<typeof postgres> | null = null;
 
-// ✅ Logger detalhado do Drizzle
+// ✅ Logger detalhado do Drizzle (apenas em dev)
 const drizzleLogger = {
   logQuery(query: string, params?: unknown[]) {
     console.log("🟦 [DRIZZLE] SQL:", query);
@@ -19,17 +19,17 @@ const drizzleLogger = {
 };
 
 export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
+  if (!_db && ENV.databaseUrl) {
     try {
-      _client = postgres(process.env.DATABASE_URL, {
+      _client = postgres(ENV.databaseUrl, {
         ssl: { rejectUnauthorized: false },
         max: 10,
         idle_timeout: 20,
         connect_timeout: 10,
       });
 
-      // ✅ ATIVA LOG DO DRIZZLE AQUI
-      _db = drizzle(_client, { logger: drizzleLogger });
+      // ✅ Ativa log do Drizzle só em dev
+      _db = drizzle(_client, { logger: ENV.isProduction ? undefined : drizzleLogger });
 
       console.log("[Database] ✅ Conexão estabelecida com sucesso");
 
@@ -38,22 +38,24 @@ export async function getDb() {
         await ensureSchema(_db);
         console.log("[Database] ✅ Schema verificado/ajustado com sucesso");
       } catch (schemaErr) {
-        console.error(
-          "[Database] ⚠️ Falha ao garantir schema (continuando):",
-          schemaErr
-        );
+        console.error("[Database] ⚠️ Falha ao garantir schema (continuando):", schemaErr);
       }
     } catch (error) {
       console.error("[Database] ❌ Failed to connect:", error);
       _db = null;
     }
   }
+
+  if (!_db && !ENV.databaseUrl) {
+    console.warn("[Database] ⚠️ DATABASE_URL ausente (ENV.databaseUrl vazio).");
+  }
+
   return _db;
 }
 
 // Função para verificar se é o owner do sistema
 function isSystemOwner(openId: string): boolean {
-  const ownerOpenId = ENV.ownerOpenId || process.env.OWNER_OPEN_ID;
+  const ownerOpenId = ENV.ownerOpenId;
   if (!ownerOpenId) return false;
   return openId.toLowerCase() === ownerOpenId.toLowerCase();
 }
@@ -76,7 +78,6 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       openId: user.openId,
     };
 
-    // ⚠️ Mantive sua lógica aqui, só com “trava” extra
     const updateSet: Record<string, unknown> = {};
 
     const textFields = ["name", "email", "loginMethod", "passwordHash"] as const;
@@ -105,9 +106,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.createdByAdminId = null;
       updateSet.createdByAdminId = null;
 
-      console.log(
-        `[Database] 👑 Usuário ${user.openId} identificado como OWNER do sistema`
-      );
+      console.log(`[Database] 👑 Usuário ${user.openId} identificado como OWNER do sistema`);
     } else if (user.role !== undefined) {
       values.role = user.role;
       updateSet.role = user.role;
@@ -143,9 +142,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       });
 
     console.log(
-      `[Database] ✅ Usuário ${user.openId} upserted com role: ${
-        (values as any).role || "user"
-      }`
+      `[Database] ✅ Usuário ${user.openId} upserted com role: ${(values as any).role || "user"}`
     );
   } catch (error) {
     console.error("[Database] ❌ Failed to upsert user:", error);
