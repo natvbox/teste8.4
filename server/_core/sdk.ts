@@ -80,11 +80,16 @@ class OAuthService {
   }
 }
 
-const createOAuthHttpClient = (): AxiosInstance =>
-  axios.create({
-    baseURL: ENV.oAuthServerUrl || "http://localhost:3000",
+const createOAuthHttpClient = (): AxiosInstance => {
+  // Se não tem OAuth, não deveria ficar chamando localhost silenciosamente.
+  // Mantemos um baseURL "neutro" apenas para não quebrar a criação do client,
+  // mas as rotas OAuth só serão usadas se OAUTH_SERVER_URL estiver configurado.
+  const baseURL = ENV.oAuthServerUrl || "http://127.0.0.1";
+  return axios.create({
+    baseURL,
     timeout: AXIOS_TIMEOUT_MS,
   });
+};
 
 class SDKServer {
   private readonly client: AxiosInstance;
@@ -119,7 +124,7 @@ class SDKServer {
 
   // Verificar se é o owner do sistema
   private isSystemOwner(openId: string): boolean {
-    const ownerOpenId = ENV.ownerOpenId || process.env.OWNER_OPEN_ID;
+    const ownerOpenId = ENV.ownerOpenId;
     if (!ownerOpenId) return false;
     return openId.toLowerCase() === ownerOpenId.toLowerCase();
   }
@@ -162,7 +167,8 @@ class SDKServer {
   }
 
   private getSessionSecret() {
-    const secret = ENV.cookieSecret || "default-secret-for-development-only";
+    // Em produção o index.ts já impede subir sem secret.
+    const secret = ENV.cookieSecret || "dev-cookie-secret";
     return new TextEncoder().encode(secret);
   }
 
@@ -276,23 +282,25 @@ class SDKServer {
       try {
         // Determinar role baseado no OWNER_OPEN_ID
         const isOwner = this.isSystemOwner(sessionUserId);
-        const role = isOwner ? 'owner' : 'user';
-        
+        const role = isOwner ? "owner" : "user";
+
         // Criar usuário no banco de dados
         await db.upsertUser({
           openId: sessionUserId,
           name: session.name || null,
-          email: sessionUserId.includes('@') ? sessionUserId : null,
-          loginMethod: 'local',
+          email: sessionUserId.includes("@") ? sessionUserId : null,
+          loginMethod: "local",
           lastSignedIn: signedInAt,
           role: role,
           tenantId: null, // Será definido posteriormente se for admin
         });
-        
+
         user = await db.getUserByOpenId(sessionUserId);
-        
+
         if (user) {
-          console.log(`[Auth] ✅ Usuário criado: ${sessionUserId}, role: ${user.role}`);
+          console.log(
+            `[Auth] ✅ Usuário criado: ${sessionUserId}, role: ${user.role}`
+          );
         }
       } catch (error) {
         console.error("[Auth] ❌ Falha ao criar usuário:", error);
@@ -305,11 +313,11 @@ class SDKServer {
     }
 
     // Verificar se deveria ser owner mas não é
-    if (this.isSystemOwner(user.openId) && user.role !== 'owner') {
+    if (this.isSystemOwner(user.openId) && user.role !== "owner") {
       console.log(`[Auth] Atualizando ${user.openId} para role owner`);
       await db.upsertUser({
         openId: user.openId,
-        role: 'owner',
+        role: "owner",
         tenantId: null,
         lastSignedIn: signedInAt,
       });
@@ -322,7 +330,9 @@ class SDKServer {
       lastSignedIn: signedInAt,
     });
 
-    console.log(`[Auth] ✅ Usuário autenticado: ${user!.openId}, role: ${user!.role}, tenantId: ${user!.tenantId}`);
+    console.log(
+      `[Auth] ✅ Usuário autenticado: ${user!.openId}, role: ${user!.role}, tenantId: ${user!.tenantId}`
+    );
     return user!;
   }
 }
