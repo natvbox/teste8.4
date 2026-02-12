@@ -27,7 +27,10 @@ export async function getDb() {
         await ensureSchema(_db);
         console.log("[Database] ✅ Schema verificado/ajustado com sucesso");
       } catch (schemaErr) {
-        console.error("[Database] ⚠️ Falha ao garantir schema (continuando):", schemaErr);
+        console.error(
+          "[Database] ⚠️ Falha ao garantir schema (continuando):",
+          schemaErr
+        );
       }
     } catch (error) {
       console.error("[Database] ❌ Failed to connect:", error);
@@ -44,6 +47,21 @@ function isSystemOwner(openId: string): boolean {
   return openId.toLowerCase() === ownerOpenId.toLowerCase();
 }
 
+/**
+ * ✅ Tipo seguro: SOMENTE colunas reais do update do users
+ * (evita criar set com chave "undefined" ou qualquer lixo)
+ */
+type UpsertUserUpdateSet = Partial<{
+  name: string | null;
+  email: string | null;
+  loginMethod: string | null;
+  passwordHash: string | null;
+  lastSignedIn: Date;
+  role: "user" | "admin" | "owner";
+  tenantId: number | null;
+  createdByAdminId: number | null;
+}>;
+
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) {
     throw new Error("User openId is required for upsert");
@@ -56,13 +74,15 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   }
 
   try {
-    // Verificar se é o owner do sistema
     const isOwner = isSystemOwner(user.openId);
 
-    const values: InsertUser = {
+    // ✅ values: só colunas reais
+    const values: Partial<InsertUser> = {
       openId: user.openId,
     };
-    const updateSet: Record<string, unknown> = {};
+
+    // ✅ updateSet: só colunas reais (TIPADO)
+    const updateSet: UpsertUserUpdateSet = {};
 
     const textFields = ["name", "email", "loginMethod", "passwordHash"] as const;
     type TextField = (typeof textFields)[number];
@@ -70,9 +90,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     const assignNullable = (field: TextField) => {
       const value = user[field];
       if (value === undefined) return;
-      const normalized = value ?? null;
-      values[field] = normalized;
-      updateSet[field] = normalized;
+
+      const normalized = (value ?? null) as string | null;
+      (values as any)[field] = normalized;
+      (updateSet as any)[field] = normalized;
     };
 
     textFields.forEach(assignNullable);
@@ -86,44 +107,59 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     if (isOwner) {
       values.role = "owner";
       updateSet.role = "owner";
+
       values.tenantId = null; // Owner não tem tenant
       updateSet.tenantId = null;
+
       values.createdByAdminId = null;
       updateSet.createdByAdminId = null;
 
-      console.log(`[Database] 👑 Usuário ${user.openId} identificado como OWNER do sistema`);
+      console.log(
+        `[Database] 👑 Usuário ${user.openId} identificado como OWNER do sistema`
+      );
     } else if (user.role !== undefined) {
       values.role = user.role;
-      updateSet.role = user.role;
+      updateSet.role = user.role as any;
     }
 
     // Manter tenantId se fornecido (para admins e users)
     if (user.tenantId !== undefined && !isOwner) {
-      values.tenantId = user.tenantId;
-      updateSet.tenantId = user.tenantId;
+      values.tenantId = user.tenantId as any;
+      updateSet.tenantId = user.tenantId as any;
     }
 
     // Manter createdByAdminId se fornecido (para users criados por admin)
     if (user.createdByAdminId !== undefined && !isOwner) {
-      values.createdByAdminId = user.createdByAdminId;
-      updateSet.createdByAdminId = user.createdByAdminId;
+      values.createdByAdminId = user.createdByAdminId as any;
+      updateSet.createdByAdminId = user.createdByAdminId as any;
     }
 
+    // Garantir lastSignedIn
     if (!values.lastSignedIn) {
       values.lastSignedIn = new Date();
     }
-
-    if (Object.keys(updateSet).length === 0) {
-      updateSet.lastSignedIn = new Date();
+    if (!updateSet.lastSignedIn) {
+      updateSet.lastSignedIn = values.lastSignedIn;
     }
 
-    // PostgreSQL: usar onConflict para upsert
-    await db.insert(users).values(values).onConflictDoUpdate({
-      target: users.openId,
-      set: updateSet,
-    });
+    // 🛡️ TRAVA EXTRA: nunca permitir chave "undefined"
+    // (caso algum lugar gere obj[undefined] = ...)
+    delete (updateSet as any)["undefined"];
+    delete (values as any)["undefined"];
 
-    console.log(`[Database] ✅ Usuário ${user.openId} upserted com role: ${values.role || "user"}`);
+    await db
+      .insert(users)
+      .values(values as any)
+      .onConflictDoUpdate({
+        target: users.openId,
+        set: updateSet as any,
+      });
+
+    console.log(
+      `[Database] ✅ Usuário ${user.openId} upserted com role: ${
+        (values as any).role || "user"
+      }`
+    );
   } catch (error) {
     console.error("[Database] ❌ Failed to upsert user:", error);
     throw error;
@@ -139,12 +175,17 @@ export async function getUserByOpenId(openId: string) {
   let retries = 3;
   while (retries > 0) {
     try {
-      const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+      const result = await db
+        .select()
+        .from(users)
+        .where(eq(users.openId, openId))
+        .limit(1);
+
       return result.length > 0 ? result[0] : undefined;
     } catch (error) {
       retries--;
       if (retries > 0) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 500));
       } else {
         console.error("[Database] ❌ Failed to get user after retries:", error);
         return undefined;
