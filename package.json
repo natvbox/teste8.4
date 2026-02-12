@@ -12,9 +12,7 @@
     "dev:server": "cross-env NODE_ENV=development tsx server/_core/index.ts",
 
     "build:client": "vite build --config client/vite.config.ts",
-
-    "build:server": "esbuild server/_core/index.ts --platform=node --bundle --format=esm --outfile=dist/index.js",
-
+    "build:server": "esbuild server/_core/index.ts --platform=node --bundle --format=esm --outfile=dist/index.js --external:lightningcss --external:@tailwindcss/vite",
     "build": "npm run build:client && npm run build:server",
 
     "start": "cross-env NODE_ENV=production node dist/index.js",
@@ -98,6 +96,9 @@
     "express": "^4.19.2",
     "cors": "^2.8.5",
     "cookie-parser": "^1.4.6",
+
+    "axios": "^1.7.9",
+    "jose": "^5.9.6",
 
     "drizzle-orm": "^0.44.0",
     "postgres": "^3.4.5"
