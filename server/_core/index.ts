@@ -30,10 +30,8 @@ async function startServer() {
   app.use(
     cors({
       origin: (origin, callback) => {
-        // Permite chamadas sem origin (ex: curl, mobile apps)
         if (!origin) return callback(null, true);
 
-        // Permite o próprio domínio
         if (origin.includes(ENV.APP_URL)) {
           return callback(null, true);
         }
@@ -74,19 +72,22 @@ async function startServer() {
 
   /* ============================
      FRONTEND ESTÁTICO (PROD)
+     Sempre serve se existir dist/public
   ============================ */
-  if (ENV.isProduction) {
-    const publicPath = path.join(__dirname, "../public");
 
-    app.use(express.static(publicPath));
+  // Estamos dentro de dist/index.js
+  // Então o frontend está em dist/public
+  const publicPath = path.join(__dirname, "public");
 
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(publicPath, "index.html"));
-    });
+  app.use(express.static(publicPath));
 
-    console.log("🚀 PROD: você pode navegar no frontend estático");
-    console.log("📁 Caminho do frontend:", publicPath);
-  }
+  // SPA fallback (React Router / Wouter)
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(publicPath, "index.html"));
+  });
+
+  console.log("🚀 Frontend estático habilitado");
+  console.log("📁 Caminho do frontend:", publicPath);
 
   /* ============================
      START SERVER
