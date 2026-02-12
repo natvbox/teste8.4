@@ -1,19 +1,19 @@
-import "dotenv/config";
-
 import express from "express";
 import { createServer } from "http";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import path from "path";
 import { fileURLToPath } from "url";
-
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
-import { setupVite } from "./vite";
+import { ENV } from "./env";
 
+/* ============================
+   FIX PARA __dirname EM ESM
+============================ */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -21,64 +21,44 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  // Render/Proxy (cookies secure + IP real)
+  // Necessário para cookies funcionarem atrás do proxy (Render)
   app.set("trust proxy", 1);
 
-  // CORS (precisa permitir credentials)
+  /* ============================
+     CORS
+  ============================ */
   app.use(
     cors({
-      origin: true,
+      origin: (origin, callback) => {
+        // Permite chamadas sem origin (ex: curl, mobile apps)
+        if (!origin) return callback(null, true);
+
+        // Permite o próprio domínio
+        if (origin.includes(ENV.APP_URL)) {
+          return callback(null, true);
+        }
+
+        return callback(new Error("Not allowed by CORS"));
+      },
       credentials: true,
     })
   );
 
-  // Cookies (sessão)
-  app.use(cookieParser());
+  /* ============================
+     Middlewares essenciais
+  ============================ */
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
 
-  // Healthcheck
-  app.get("/api/health", (_req, res) => {
-    res.status(200).json({ ok: true });
-  });
-
-  /**
-   * ✅ MUITO IMPORTANTE:
-   * JSON parser ANTES do tRPC.
-   * Em alguns proxies o Content-Type pode vir como text/plain,
-   * e sem isso o input chega undefined (Zod -> "expected object, received undefined").
-   */
   app.use(
-    express.json({
-      limit: "2mb",
-      type: ["application/json", "application/*+json", "text/plain", "*/*"],
-    })
+    cookieParser(
+      ENV.COOKIE_SECRET || "default-secret-change-in-production"
+    )
   );
-  app.use(express.urlencoded({ limit: "2mb", extended: true }));
 
-  // Debug controlado (não imprime senha)
-  app.use("/api/trpc", (req, _res, next) => {
-    if (req.method === "POST" && String(req.url).includes("auth.login")) {
-      const body: any = (req as any).body;
-      const keys = body && typeof body === "object" ? Object.keys(body) : null;
-
-      const safePreview =
-        body && typeof body === "object"
-          ? {
-              keys,
-              hasBatch0: Boolean((body as any)[0] || (body as any)["0"]),
-              hasJson0: Boolean((body as any)[0]?.json || (body as any)["0"]?.json),
-              hasLoginId:
-                Boolean((body as any)?.loginId) ||
-                Boolean((body as any)[0]?.json?.loginId) ||
-                Boolean((body as any)["0"]?.json?.loginId),
-            }
-          : { keys: null };
-
-      console.log("[tRPC][auth.login] body preview:", safePreview);
-    }
-    next();
-  });
-
-  // tRPC
+  /* ============================
+     tRPC
+  ============================ */
   app.use(
     "/api/trpc",
     createExpressMiddleware({
@@ -87,40 +67,41 @@ async function startServer() {
     })
   );
 
-  // OAuth (se você usa; se não usar, pode manter sem problemas)
+  /* ============================
+     OAuth (se estiver usando)
+  ============================ */
   registerOAuthRoutes(app);
 
-  const isProd = process.env.NODE_ENV === "production";
+  /* ============================
+     FRONTEND ESTÁTICO (PROD)
+  ============================ */
+  if (ENV.isProduction) {
+    const publicPath = path.join(__dirname, "../public");
 
-  if (!isProd) {
-    // DEV: Vite middleware
-    await setupVite(app, server);
-  } else {
-    // PROD: servir o build do client
-    // (seu build do vite está saindo em dist/public)
-    const frontendPath = path.resolve(process.cwd(), "dist", "public");
-
-    console.log("🚀 PROD: frontend estático");
-    console.log("📁 Frontend path:", frontendPath);
-
-    app.use(express.static(frontendPath));
+    app.use(express.static(publicPath));
 
     app.get("*", (_req, res) => {
-      res.sendFile(path.join(frontendPath, "index.html"));
+      res.sendFile(path.join(publicPath, "index.html"));
     });
+
+    console.log("🚀 PROD: você pode navegar no frontend estático");
+    console.log("📁 Caminho do frontend:", publicPath);
   }
 
-  const port = Number(process.env.PORT || 10000);
+  /* ============================
+     START SERVER
+  ============================ */
+  const PORT = Number(process.env.PORT) || 10000;
 
-  server.listen(port, "0.0.0.0", () => {
+  server.listen(PORT, () => {
     console.log("========================================");
     console.log("✅ Servidor rodando");
-    console.log("🌐 Porta:", port);
+    console.log("🌐 Porta:", PORT);
     console.log("========================================");
   });
 }
 
 startServer().catch((err) => {
-  console.error("❌ Erro fatal ao iniciar servidor:", err);
+  console.error("❌ Erro ao iniciar servidor:", err);
   process.exit(1);
 });
