@@ -1,6 +1,7 @@
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
 import type { User } from "../../drizzle/schema";
 import { sdk } from "./sdk";
+import { ENV } from "./env";
 
 export type TrpcContext = {
   req: CreateExpressContextOptions["req"];
@@ -13,10 +14,20 @@ export async function createContext(
 ): Promise<TrpcContext> {
   let user: User | null = null;
 
-  try {
-    user = await sdk.authenticateRequest(opts.req);
-  } catch (error) {
-    user = null;
+  // Otimização: se não tem header cookie, nem tenta autenticar
+  const hasCookieHeader = Boolean(opts.req.headers.cookie);
+
+  if (hasCookieHeader) {
+    try {
+      user = await sdk.authenticateRequest(opts.req);
+    } catch (error) {
+      user = null;
+
+      // Log só em dev (não polui produção)
+      if (!ENV.isProduction) {
+        console.warn("[Auth] Context auth failed:", String(error));
+      }
+    }
   }
 
   return {
