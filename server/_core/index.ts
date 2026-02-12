@@ -30,8 +30,10 @@ async function startServer() {
   app.use(
     cors({
       origin: (origin, callback) => {
+        // Permite chamadas sem origin (ex: curl, mobile apps)
         if (!origin) return callback(null, true);
 
+        // Permite o próprio domínio
         if (origin.includes(ENV.APP_URL)) {
           return callback(null, true);
         }
@@ -49,9 +51,7 @@ async function startServer() {
   app.use(express.urlencoded({ extended: true }));
 
   app.use(
-    cookieParser(
-      ENV.COOKIE_SECRET || "default-secret-change-in-production"
-    )
+    cookieParser(ENV.COOKIE_SECRET || "default-secret-change-in-production")
   );
 
   /* ============================
@@ -72,18 +72,20 @@ async function startServer() {
 
   /* ============================
      FRONTEND ESTÁTICO (PROD)
-     Sempre serve se existir dist/public
+     (dist/public)
   ============================ */
-
-  // Estamos dentro de dist/index.js
-  // Então o frontend está em dist/public
   const publicPath = path.join(__dirname, "public");
 
+  // ✅ Serve arquivos estáticos (css/js/images) corretamente
   app.use(express.static(publicPath));
 
-  // SPA fallback (React Router / Wouter)
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(publicPath, "index.html"));
+  // ✅ SPA fallback (somente para rotas do frontend)
+  // Não intercepta /api
+  app.get("*", (req, res) => {
+    if (req.path.startsWith("/api")) {
+      return res.status(404).end();
+    }
+    return res.sendFile(path.join(publicPath, "index.html"));
   });
 
   console.log("🚀 Frontend estático habilitado");
