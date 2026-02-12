@@ -20,12 +20,34 @@ interface AuthContextType {
   isAdmin: boolean;
   isOwner: boolean;
   isUser: boolean;
-  login: (params: { loginId: string; password: string; name?: string; email?: string }) => Promise<void>;
+  login: (params: {
+    loginId: string;
+    password: string;
+    name?: string;
+    email?: string;
+  }) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+function normalizeMe(data: unknown): UserData | null {
+  if (!data) return null;
+
+  // formato { user: ... }
+  if (typeof data === "object" && data !== null && "user" in data) {
+    const u = (data as any).user;
+    return u && typeof u === "object" ? (u as UserData) : null;
+  }
+
+  // formato user direto
+  if (typeof data === "object" && data !== null && "role" in data && "openId" in data) {
+    return data as UserData;
+  }
+
+  return null;
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const utils = trpc.useUtils();
@@ -37,13 +59,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginMutation = trpc.auth.login.useMutation({
     onSuccess: async () => {
+      // invalida o "me" para buscar o usuário com cookie novo
       await utils.auth.me.invalidate();
     },
   });
 
   const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: () => {
-      utils.auth.me.setData(undefined, null as any);
+    onSuccess: async () => {
+      await utils.auth.me.invalidate();
     },
   });
 
@@ -69,7 +92,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       // garante atualização imediata do estado após login
-      await utils.auth.me.invalidate();
       await utils.auth.me.refetch();
     },
     [loginMutation, utils.auth.me]
@@ -85,7 +107,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
     } finally {
-      utils.auth.me.setData(undefined, null as any);
+      // limpa cache do "me" localmente
+      utils.auth.me.setData(undefined, undefined);
       await utils.auth.me.invalidate();
     }
   }, [logoutMutation, utils.auth.me]);
@@ -94,12 +117,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await meQuery.refetch();
   }, [meQuery]);
 
-  // ✅ NORMALIZAÇÃO DO RETORNO DO auth.me:
-  // - se vier { user: ... }, usa data.user
-  // - se vier o user direto, usa data
-  const rawMe: any = meQuery.data;
-  const userData: UserData | null =
-    rawMe && typeof rawMe === "object" && "user" in rawMe ? (rawMe.user as UserData | null) : ((rawMe ?? null) as UserData | null);
+  const userData = normalizeMe(meQuery.data);
 
   const value = useMemo<AuthContextType>(() => {
     const role = userData?.role;
