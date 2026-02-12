@@ -25,27 +25,6 @@ async function startServer() {
   app.set("trust proxy", 1);
 
   /* ============================
-     CORS
-  ============================ */
-  app.use(
-    cors({
-      origin: (origin, callback) => {
-        // Permite chamadas sem origin (ex: curl, mobile apps)
-        if (!origin) return callback(null, true);
-
-        // Permite o próprio domínio
-        // OBS: se ENV.APP_URL estiver vazio, isso pode bloquear. Se der erro de CORS, ajustamos.
-        if (origin.includes(ENV.APP_URL)) {
-          return callback(null, true);
-        }
-
-        return callback(new Error("Not allowed by CORS"));
-      },
-      credentials: true,
-    })
-  );
-
-  /* ============================
      Middlewares essenciais
   ============================ */
   app.use(express.json());
@@ -56,10 +35,35 @@ async function startServer() {
   );
 
   /* ============================
-     tRPC
+     CORS (APENAS PARA API)
+     NÃO aplique CORS no site inteiro,
+     senão quebra /assets e até o próprio frontend.
+  ============================ */
+  const corsOptions: cors.CorsOptions = {
+    origin: (origin, callback) => {
+      // sem origin (curl, apps) -> ok
+      if (!origin) return callback(null, true);
+
+      // Permite localhost dev
+      if (origin.startsWith("http://localhost")) return callback(null, true);
+
+      // Permite qualquer onrender.com do seu app
+      if (origin.includes(".onrender.com")) return callback(null, true);
+
+      // Permite o domínio configurado (se existir)
+      if (ENV.APP_URL && origin.includes(ENV.APP_URL)) return callback(null, true);
+
+      return callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  };
+
+  /* ============================
+     tRPC (com CORS só aqui)
   ============================ */
   app.use(
     "/api/trpc",
+    cors(corsOptions),
     createExpressMiddleware({
       router: appRouter,
       createContext,
@@ -68,27 +72,24 @@ async function startServer() {
 
   /* ============================
      OAuth (se estiver usando)
+     (se ele expõe rotas /oauth, também precisa CORS)
   ============================ */
+  app.use("/oauth", cors(corsOptions));
   registerOAuthRoutes(app);
 
   /* ============================
-     FRONTEND ESTÁTICO (PROD)
-     dist/public
+     FRONTEND ESTÁTICO (dist/public)
   ============================ */
   const publicPath = path.join(__dirname, "public");
 
-  // 1) Arquivos estáticos (css/js/images)
+  // Arquivos estáticos SEM CORS
   app.use(express.static(publicPath));
 
-  // 2) SPA fallback (somente para rotas do frontend)
-  // - não pega /api
-  // - não pega arquivos com extensão (assets)
+  // SPA fallback (somente para rotas do frontend)
   app.use((req, res, next) => {
     if (req.method !== "GET") return next();
     if (req.path.startsWith("/api")) return next();
-
-    // Se tem extensão (.js, .css, .png etc), NÃO faz fallback
-    if (req.path.includes(".")) return next();
+    if (req.path.includes(".")) return next(); // .js .css .png etc
 
     return res.sendFile(path.join(publicPath, "index.html"));
   });
