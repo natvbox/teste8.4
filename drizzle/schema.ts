@@ -1,5 +1,6 @@
 import {
   integer,
+  serial,
   pgEnum,
   pgTable,
   text,
@@ -25,7 +26,7 @@ const feedbackEnum = pgEnum("deliveryFeedback", ["liked", "renew", "disliked"]);
  * Tabela de Tenants (Clientes/Empresas)
  */
 export const tenants = pgTable("tenants", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  id: serial("id").primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
   slug: varchar("slug", { length: 100 }).notNull().unique(),
   ownerId: integer("ownerId"),
@@ -46,7 +47,7 @@ export type InsertTenant = typeof tenants.$inferInsert;
  * - User comum: role=user, tenantId=..., createdByAdminId=<admin.id>
  */
 export const users = pgTable("users", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  id: serial("id").primaryKey(),
 
   tenantId: integer("tenantId"),
 
@@ -75,7 +76,7 @@ export type InsertUser = typeof users.$inferInsert;
  * Grupos (isolados por Tenant e por Admin criador)
  */
 export const groups = pgTable("groups", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  id: serial("id").primaryKey(),
   tenantId: integer("tenantId").notNull(),
 
   // ✅ isolamento por admin
@@ -94,7 +95,7 @@ export type InsertGroup = typeof groups.$inferInsert;
  * Relação user <-> group
  */
 export const userGroups = pgTable("user_groups", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  id: serial("id").primaryKey(),
   userId: integer("userId").notNull(),
   groupId: integer("groupId").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -104,7 +105,7 @@ export const userGroups = pgTable("user_groups", {
  * Notificações/Mensagens (isoladas por tenant e criadas por admin)
  */
 export const notifications = pgTable("notifications", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  id: serial("id").primaryKey(),
   tenantId: integer("tenantId").notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   content: text("content").notNull(),
@@ -133,7 +134,7 @@ export type InsertNotification = typeof notifications.$inferInsert;
  * Agendamentos
  */
 export const schedules = pgTable("schedules", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  id: serial("id").primaryKey(),
   tenantId: integer("tenantId").notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   content: text("content").notNull(),
@@ -159,7 +160,7 @@ export type InsertSchedule = typeof schedules.$inferInsert;
  * Entregas (inbox do usuário)
  */
 export const deliveries = pgTable("deliveries", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  id: serial("id").primaryKey(),
   tenantId: integer("tenantId").notNull(),
   notificationId: integer("notificationId").notNull(),
   userId: integer("userId").notNull(),
@@ -184,7 +185,7 @@ export type InsertDelivery = typeof deliveries.$inferInsert;
  * Arquivos (isolados por tenant)
  */
 export const files = pgTable("files", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  id: serial("id").primaryKey(),
   tenantId: integer("tenantId").notNull(),
   filename: varchar("filename", { length: 255 }).notNull(),
   fileKey: varchar("fileKey", { length: 500 }).notNull(),
@@ -204,7 +205,7 @@ export type InsertFile = typeof files.$inferInsert;
  * Logs (isolados por tenant e opcionalmente por admin)
  */
 export const logs = pgTable("logs", {
-  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  id: serial("id").primaryKey(),
   tenantId: integer("tenantId"),
 
   // ✅ opcional para auditoria por admin
