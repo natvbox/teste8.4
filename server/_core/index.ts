@@ -34,6 +34,7 @@ async function startServer() {
         if (!origin) return callback(null, true);
 
         // Permite o próprio domínio
+        // OBS: se ENV.APP_URL estiver vazio, isso pode bloquear. Se der erro de CORS, ajustamos.
         if (origin.includes(ENV.APP_URL)) {
           return callback(null, true);
         }
@@ -72,19 +73,23 @@ async function startServer() {
 
   /* ============================
      FRONTEND ESTÁTICO (PROD)
-     (dist/public)
+     dist/public
   ============================ */
   const publicPath = path.join(__dirname, "public");
 
-  // ✅ Serve arquivos estáticos (css/js/images) corretamente
+  // 1) Arquivos estáticos (css/js/images)
   app.use(express.static(publicPath));
 
-  // ✅ SPA fallback (somente para rotas do frontend)
-  // Não intercepta /api
-  app.get("*", (req, res) => {
-    if (req.path.startsWith("/api")) {
-      return res.status(404).end();
-    }
+  // 2) SPA fallback (somente para rotas do frontend)
+  // - não pega /api
+  // - não pega arquivos com extensão (assets)
+  app.use((req, res, next) => {
+    if (req.method !== "GET") return next();
+    if (req.path.startsWith("/api")) return next();
+
+    // Se tem extensão (.js, .css, .png etc), NÃO faz fallback
+    if (req.path.includes(".")) return next();
+
     return res.sendFile(path.join(publicPath, "index.html"));
   });
 
