@@ -10,7 +10,7 @@
   "scripts": {
     "dev:client": "vite --config client/vite.config.ts",
     "build:client": "vite build --config client/vite.config.ts",
-    "build:server": "esbuild server/_core/index.ts --platform=node --bundle --format=esm --outfile=dist/index.js --external:lightningcss --external:@tailwindcss/vite --external:postgres --external:@aws-sdk/client-s3 --external:@aws-sdk/s3-request-presigner",
+    "build:server": "esbuild server/_core/index.ts --platform=node --bundle --format=esm --outfile=dist/index.js --external:lightningcss --external:@tailwindcss/vite --external:postgres --external:@aws-sdk/client-s3 --external:@aws-sdk/s3-request-presigner --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
     "build": "npm run build:client && npm run build:server",
     "start": "node dist/index.js",
     "check": "tsc --noEmit",
@@ -57,9 +57,9 @@
     "@trpc/react-query": "^10.45.4",
     "@trpc/server": "^10.45.4",
 
-    "@aws-sdk/client-s3": "^3.0.0",
-    "@aws-sdk/s3-request-presigner": "^3.0.0",
-    "postgres": "^3.0.0",
+    "@aws-sdk/client-s3": "^3.540.0",
+    "@aws-sdk/s3-request-presigner": "^3.540.0",
+    "postgres": "^3.4.4",
 
     "axios": "^1.6.8",
     "bcryptjs": "^2.4.3",
