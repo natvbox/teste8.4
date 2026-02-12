@@ -8,28 +8,60 @@ export type TrpcContext = inferAsyncReturnType<typeof createContext>;
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
-  // Mantém serialização JSON padrão para compatibilidade entre cliente e servidor.
 });
 
 export const router = t.router;
-export const middleware = t.middleware;
-
-/**
- * Procedimento público (sem auth)
- */
 export const publicProcedure = t.procedure;
 
 /**
- * Middleware de autenticação
+ * Helpers tolerantes: funcionam mesmo que seu contexto guarde o usuário
+ * em ctx.user OU em ctx.session (dependendo de como você implementou).
  */
-const isAuthed = middleware(({ ctx, next }) => {
-  if (!ctx.user) {
-    throw new TRPCError({ code: "UNAUTHORIZED", message: "Não autenticado" });
+function getUser(ctx: any) {
+  return ctx?.user ?? ctx?.session?.user ?? ctx?.auth?.user ?? null;
+}
+
+function getRole(ctx: any): string | undefined {
+  const u = getUser(ctx);
+  return u?.role ?? ctx?.session?.role ?? ctx?.user?.role;
+}
+
+/**
+ * ✅ Logado
+ */
+export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+  const user = getUser(ctx);
+  if (!user) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "UNAUTHED" });
   }
-  return next({
-    ctx: {
-      ...ctx,
-      user: ctx.user,
-    },
-  });
+  // Se quiser, você pode garantir que ctx.user sempre exista daqui pra frente:
+  (ctx as any).user = user;
+  return next({ ctx });
 });
+
+/**
+ * ✅ Admin only
+ */
+export const adminOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
+  const role = getRole(ctx);
+  if (role !== "admin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "ADMIN_ONLY" });
+  }
+  return next();
+});
+
+/**
+ * ✅ Owner only
+ */
+export const ownerOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
+  const role = getRole(ctx);
+  if (role !== "owner") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "OWNER_ONLY" });
+  }
+  return next();
+});
+
+/**
+ * Compatibilidade: alguns arquivos importam "adminProcedure"
+ */
+export const adminProcedure = adminOnlyProcedure;
