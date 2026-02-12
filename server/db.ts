@@ -8,7 +8,16 @@ import { ensureSchema } from "./_core/ensureSchema";
 let _db: ReturnType<typeof drizzle> | null = null;
 let _client: ReturnType<typeof postgres> | null = null;
 
-// Lazily create the drizzle instance so local tooling can run without a DB.
+// ✅ Logger detalhado do Drizzle
+const drizzleLogger = {
+  logQuery(query: string, params?: unknown[]) {
+    console.log("🟦 [DRIZZLE] SQL:", query);
+    if (params && params.length) {
+      console.log("🟨 [DRIZZLE] PARAMS:", JSON.stringify(params));
+    }
+  },
+};
+
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
@@ -19,7 +28,9 @@ export async function getDb() {
         connect_timeout: 10,
       });
 
-      _db = drizzle(_client);
+      // ✅ ATIVA LOG DO DRIZZLE AQUI
+      _db = drizzle(_client, { logger: drizzleLogger });
+
       console.log("[Database] ✅ Conexão estabelecida com sucesso");
 
       // ✅ Garantir schema/tabelas/colunas necessárias (SEM apagar dados)
@@ -47,21 +58,6 @@ function isSystemOwner(openId: string): boolean {
   return openId.toLowerCase() === ownerOpenId.toLowerCase();
 }
 
-/**
- * ✅ Tipo seguro: SOMENTE colunas reais do update do users
- * (evita criar set com chave "undefined" ou qualquer lixo)
- */
-type UpsertUserUpdateSet = Partial<{
-  name: string | null;
-  email: string | null;
-  loginMethod: string | null;
-  passwordHash: string | null;
-  lastSignedIn: Date;
-  role: "user" | "admin" | "owner";
-  tenantId: number | null;
-  createdByAdminId: number | null;
-}>;
-
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) {
     throw new Error("User openId is required for upsert");
@@ -76,13 +72,12 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   try {
     const isOwner = isSystemOwner(user.openId);
 
-    // ✅ values: só colunas reais
     const values: Partial<InsertUser> = {
       openId: user.openId,
     };
 
-    // ✅ updateSet: só colunas reais (TIPADO)
-    const updateSet: UpsertUserUpdateSet = {};
+    // ⚠️ Mantive sua lógica aqui, só com “trava” extra
+    const updateSet: Record<string, unknown> = {};
 
     const textFields = ["name", "email", "loginMethod", "passwordHash"] as const;
     type TextField = (typeof textFields)[number];
@@ -90,8 +85,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     const assignNullable = (field: TextField) => {
       const value = user[field];
       if (value === undefined) return;
-
-      const normalized = (value ?? null) as string | null;
+      const normalized = value ?? null;
       (values as any)[field] = normalized;
       (updateSet as any)[field] = normalized;
     };
@@ -103,14 +97,11 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       updateSet.lastSignedIn = user.lastSignedIn;
     }
 
-    // Definir role baseado no OWNER_OPEN_ID
     if (isOwner) {
       values.role = "owner";
       updateSet.role = "owner";
-
-      values.tenantId = null; // Owner não tem tenant
+      values.tenantId = null;
       updateSet.tenantId = null;
-
       values.createdByAdminId = null;
       updateSet.createdByAdminId = null;
 
@@ -119,22 +110,19 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       );
     } else if (user.role !== undefined) {
       values.role = user.role;
-      updateSet.role = user.role as any;
+      updateSet.role = user.role;
     }
 
-    // Manter tenantId se fornecido (para admins e users)
     if (user.tenantId !== undefined && !isOwner) {
-      values.tenantId = user.tenantId as any;
-      updateSet.tenantId = user.tenantId as any;
+      values.tenantId = user.tenantId;
+      updateSet.tenantId = user.tenantId;
     }
 
-    // Manter createdByAdminId se fornecido (para users criados por admin)
     if (user.createdByAdminId !== undefined && !isOwner) {
-      values.createdByAdminId = user.createdByAdminId as any;
-      updateSet.createdByAdminId = user.createdByAdminId as any;
+      values.createdByAdminId = user.createdByAdminId;
+      updateSet.createdByAdminId = user.createdByAdminId;
     }
 
-    // Garantir lastSignedIn
     if (!values.lastSignedIn) {
       values.lastSignedIn = new Date();
     }
@@ -142,8 +130,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       updateSet.lastSignedIn = values.lastSignedIn;
     }
 
-    // 🛡️ TRAVA EXTRA: nunca permitir chave "undefined"
-    // (caso algum lugar gere obj[undefined] = ...)
+    // 🛡️ TRAVA FINAL: nunca permitir coluna "undefined"
     delete (updateSet as any)["undefined"];
     delete (values as any)["undefined"];
 
@@ -168,9 +155,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
 
 export async function getUserByOpenId(openId: string) {
   const db = await getDb();
-  if (!db) {
-    return undefined;
-  }
+  if (!db) return undefined;
 
   let retries = 3;
   while (retries > 0) {
@@ -201,14 +186,10 @@ export async function updateUserRole(
   tenantId?: number | null
 ) {
   const db = await getDb();
-  if (!db) {
-    throw new Error("Database not available");
-  }
+  if (!db) throw new Error("Database not available");
 
   const updateData: Record<string, unknown> = { role };
-  if (tenantId !== undefined) {
-    updateData.tenantId = tenantId;
-  }
+  if (tenantId !== undefined) updateData.tenantId = tenantId;
 
   await db.update(users).set(updateData).where(eq(users.id, userId));
 }
