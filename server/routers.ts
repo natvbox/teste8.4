@@ -1,4 +1,5 @@
 import { router } from "./_core/trpc";
+
 import { systemRouter } from "./_core/systemRouter";
 import { authRouter } from "./routers/auth";
 import { notificationsRouter } from "./routers/notifications";
@@ -8,9 +9,13 @@ import { uploadRouter } from "./routers/upload";
 import { tenantRouter } from "./routers/tenant";
 import { superAdminRouter } from "./routers/superadmin";
 
+/**
+ * Router principal da aplicação
+ * Todas as rotas tRPC passam por aqui
+ */
 export const appRouter = router({
-  system: systemRouter,
-  auth: authRouter,
+  system: systemRouter,        // health/debug
+  auth: authRouter,            // login/logout/me
   notifications: notificationsRouter,
   groups: groupsRouter,
   files: filesRouter,
