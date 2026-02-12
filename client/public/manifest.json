@@ -1,0 +1,11 @@
+{
+  "name": "Notifique-me - Sistema de Notificações",
+  "short_name": "Notifique-me",
+  "description": "Sistema completo de gerenciamento e envio de notificações push",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#000000",
+  "orientation": "portrait-primary",
+  "icons": []
+}

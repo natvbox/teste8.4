@@ -1,0 +1,198 @@
+-- Script de criação das tabelas para o Notifique-Me
+-- PostgreSQL - Render
+
+-- Criar tipos ENUM
+DO $$ BEGIN
+    CREATE TYPE status AS ENUM ('active', 'suspended', 'expired');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE plan AS ENUM ('basic', 'pro', 'enterprise');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE role AS ENUM ('user', 'admin', 'owner');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE priority AS ENUM ('normal', 'important', 'urgent');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE "targetType" AS ENUM ('all', 'users', 'groups');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE recurrence AS ENUM ('none', 'daily', 'weekly', 'monthly');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE "deliveryStatus" AS ENUM ('sent', 'delivered', 'failed');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- Tabela de Tenants (Clientes/Empresas)
+CREATE TABLE IF NOT EXISTS tenants (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    slug VARCHAR(100) NOT NULL UNIQUE,
+    "ownerId" INTEGER,
+    status status NOT NULL DEFAULT 'active',
+    plan plan NOT NULL DEFAULT 'basic',
+    "subscriptionExpiresAt" TIMESTAMP,
+    "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Tabela de Usuários
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    "tenantId" INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
+    "createdByAdminId" INTEGER,
+    "openId" VARCHAR(64) NOT NULL UNIQUE,
+    name TEXT,
+    email VARCHAR(320),
+    "loginMethod" VARCHAR(64),
+    "passwordHash" TEXT,
+    role role NOT NULL DEFAULT 'user',
+    "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "lastSignedIn" TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Garantir colunas novas em bases existentes (sem apagar dados)
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS "createdByAdminId" INTEGER;
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS "passwordHash" TEXT;
+
+-- Tabela de Grupos
+CREATE TABLE IF NOT EXISTS groups (
+    id SERIAL PRIMARY KEY,
+    "tenantId" INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "updatedAt" TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Tabela de Relação Usuário-Grupo
+CREATE TABLE IF NOT EXISTS user_groups (
+    id SERIAL PRIMARY KEY,
+    "userId" INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    "groupId" INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE("userId", "groupId")
+);
+
+-- Tabela de Notificações
+CREATE TABLE IF NOT EXISTS notifications (
+    id SERIAL PRIMARY KEY,
+    "tenantId" INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    content TEXT NOT NULL,
+    priority priority NOT NULL DEFAULT 'normal',
+    "createdBy" INTEGER NOT NULL REFERENCES users(id),
+    "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "targetType" "targetType" NOT NULL DEFAULT 'all',
+    "targetIds" JSONB,
+    "imageUrl" VARCHAR(500),
+    "isScheduled" BOOLEAN DEFAULT FALSE,
+    "scheduledFor" TIMESTAMP,
+    recurrence recurrence DEFAULT 'none',
+    "isActive" BOOLEAN DEFAULT TRUE
+);
+
+-- Tabela de Agendamentos
+CREATE TABLE IF NOT EXISTS schedules (
+    id SERIAL PRIMARY KEY,
+    "tenantId" INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    content TEXT NOT NULL,
+    priority priority NOT NULL DEFAULT 'normal',
+    "createdBy" INTEGER NOT NULL REFERENCES users(id),
+    "createdAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "targetType" "targetType" NOT NULL DEFAULT 'all',
+    "targetIds" JSONB,
+    "imageUrl" VARCHAR(500),
+    "scheduledFor" TIMESTAMP NOT NULL,
+    recurrence recurrence DEFAULT 'none',
+    "isActive" BOOLEAN DEFAULT TRUE,
+    "lastExecutedAt" TIMESTAMP
+);
+
+-- Tabela de Entregas
+CREATE TABLE IF NOT EXISTS deliveries (
+    id SERIAL PRIMARY KEY,
+    "tenantId" INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    "notificationId" INTEGER NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+    "userId" INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status "deliveryStatus" NOT NULL DEFAULT 'sent',
+    "deliveredAt" TIMESTAMP,
+    "readAt" TIMESTAMP,
+    "isRead" BOOLEAN DEFAULT FALSE,
+    "errorMessage" TEXT
+);
+
+-- Tabela de Arquivos
+CREATE TABLE IF NOT EXISTS files (
+    id SERIAL PRIMARY KEY,
+    "tenantId" INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    filename VARCHAR(255) NOT NULL,
+    "fileKey" VARCHAR(500) NOT NULL,
+    url VARCHAR(500) NOT NULL,
+    "mimeType" VARCHAR(100),
+    "fileSize" INTEGER,
+    "uploadedBy" INTEGER NOT NULL REFERENCES users(id),
+    "uploadedAt" TIMESTAMP NOT NULL DEFAULT NOW(),
+    "relatedNotificationId" INTEGER REFERENCES notifications(id) ON DELETE SET NULL,
+    "isPublic" BOOLEAN
+);
+
+-- Tabela de Logs
+CREATE TABLE IF NOT EXISTS logs (
+    id SERIAL PRIMARY KEY,
+    "tenantId" INTEGER REFERENCES tenants(id) ON DELETE SET NULL,
+    "userId" INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    action VARCHAR(255) NOT NULL,
+    "entityType" VARCHAR(100),
+    "entityId" INTEGER,
+    details TEXT,
+    "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Índices para performance
+CREATE INDEX IF NOT EXISTS idx_users_tenant ON users("tenantId");
+CREATE INDEX IF NOT EXISTS idx_users_openid ON users("openId");
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_groups_tenant ON groups("tenantId");
+CREATE INDEX IF NOT EXISTS idx_notifications_tenant ON notifications("tenantId");
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications("createdAt");
+CREATE INDEX IF NOT EXISTS idx_deliveries_notification ON deliveries("notificationId");
+CREATE INDEX IF NOT EXISTS idx_deliveries_user ON deliveries("userId");
+CREATE INDEX IF NOT EXISTS idx_schedules_tenant ON schedules("tenantId");
+CREATE INDEX IF NOT EXISTS idx_schedules_scheduled ON schedules("scheduledFor");
+CREATE INDEX IF NOT EXISTS idx_logs_tenant ON logs("tenantId");
+CREATE INDEX IF NOT EXISTS idx_logs_created ON logs("createdAt");
+
+-- Comentários nas tabelas
+COMMENT ON TABLE tenants IS 'Clientes/Empresas que compram licença do sistema';
+COMMENT ON TABLE users IS 'Usuários do sistema (owner, admin, user)';
+COMMENT ON TABLE groups IS 'Grupos de usuários para segmentação de notificações';
+COMMENT ON TABLE notifications IS 'Notificações enviadas para usuários';
+COMMENT ON TABLE schedules IS 'Agendamentos de notificações futuras';
+COMMENT ON TABLE deliveries IS 'Log de entrega e leitura de notificações';
+COMMENT ON TABLE files IS 'Arquivos enviados (imagens, vídeos)';
+COMMENT ON TABLE logs IS 'Logs de ações do sistema para auditoria';

@@ -1,0 +1,48 @@
+services:
+  # Serviço Web Principal
+  - type: web
+    name: notifique-me-admin
+    env: node
+    region: oregon
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: VITE_APP_ID
+        sync: false
+      - key: OAUTH_SERVER_URL
+        sync: false
+      - key: OWNER_OPEN_ID
+        value: ninfoboyn@gmail.com
+      - key: BUILT_IN_FORGE_API_URL
+        sync: false
+      - key: BUILT_IN_FORGE_API_KEY
+        sync: false
+
+  # Worker para Notificações Agendadas (Opcional)
+  - type: worker
+    name: notifique-me-worker
+    env: node
+    region: oregon
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm run worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+
+databases:
+  # Banco de Dados PostgreSQL
+  - name: notifique-me-db
+    databaseName: notifique_me
+    user: notifique_admin
+    plan: starter
