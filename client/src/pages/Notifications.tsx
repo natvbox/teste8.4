@@ -41,7 +41,8 @@ type OwnerTarget = "all" | "users" | "groups" | "admins" | "tenants";
 function asArray<T = any>(val: any): T[] {
   if (!val) return [];
   if (Array.isArray(val)) return val as T[];
-  if (typeof val === "object" && Array.isArray((val as any).data)) return (val as any).data as T[];
+  if (typeof val === "object" && Array.isArray((val as any).data))
+    return (val as any).data as T[];
   return [];
 }
 
@@ -71,12 +72,7 @@ function formatSub(it: any) {
 
 function isLikelyVideoUrl(url: string) {
   const u = url.toLowerCase();
-  return (
-    u.includes(".mp4") ||
-    u.includes(".webm") ||
-    u.includes(".ogg") ||
-    u.includes("video")
-  );
+  return u.includes(".mp4") || u.includes(".webm") || u.includes(".ogg") || u.includes("video");
 }
 
 function isLikelyImageUrl(url: string) {
@@ -118,15 +114,18 @@ export default function Notifications() {
       targetIds: [],
     }));
     setOwnerTenantIds([]);
-    // não mexe no tenantId pra não atrapalhar o filtro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOwner]);
 
   // =========================
   // Data sources
   // =========================
-  const tenantsQuery = trpc.superadmin.listTenants.useQuery(undefined, { enabled: isOwner });
-  const adminsQuery = trpc.superadmin.listAdmins.useQuery(undefined, { enabled: isOwner });
+  const tenantsQuery = trpc.superadmin.listTenants.useQuery(undefined, {
+    enabled: isOwner,
+  });
+  const adminsQuery = trpc.superadmin.listAdmins.useQuery(undefined, {
+    enabled: isOwner,
+  });
 
   // Owner: users/groups by tenant
   const ownerUsersQuery = trpc.superadmin.listUsersByTenant.useQuery(
@@ -139,16 +138,21 @@ export default function Notifications() {
   );
 
   // Admin: meu tenant
-  const myUsersQuery = trpc.tenant.listMyUsers.useQuery(undefined, { enabled: !isOwner });
-  const myGroupsQuery = trpc.groups.list.useQuery({ limit: 200 }, { enabled: !isOwner });
+  const myUsersQuery = trpc.tenant.listMyUsers.useQuery(undefined, {
+    enabled: !isOwner,
+  });
+  const myGroupsQuery = trpc.groups.list.useQuery(
+    { limit: 200 },
+    { enabled: !isOwner }
+  );
 
   // Normaliza shapes (alguns endpoints retornam [] e outros {data:[]})
   const tenants = asArray<any>(tenantsQuery.data);
   const admins = asArray<any>(adminsQuery.data);
   const ownerUsers = asArray<any>(ownerUsersQuery.data);
   const ownerGroups = asArray<any>(ownerGroupsQuery.data);
-  const myUsers = asArray<any>(myUsersQuery.data); // ✅ tenant.listMyUsers = array direto
-  const myGroups = asArray<any>(myGroupsQuery.data); // ✅ groups.list às vezes vem {data:[]}; asArray cobre
+  const myUsers = asArray<any>(myUsersQuery.data);
+  const myGroups = asArray<any>(myGroupsQuery.data);
 
   const adminTargets = useMemo(() => {
     return [
@@ -183,6 +187,14 @@ export default function Notifications() {
     }
   );
 
+  // ✅ quando o owner muda o filtro, refaz a listagem
+  useEffect(() => {
+    if (!isOwner) return;
+    if (!userData) return;
+    void listQuery.refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId]);
+
   // =========================
   // Mutations
   // =========================
@@ -191,7 +203,13 @@ export default function Notifications() {
       toast.success("Mensagem enviada");
       await utils.notifications.list.invalidate();
       setOpenCreate(false);
-      setForm((p) => ({ ...p, title: "", content: "", targetIds: [], imageUrl: "" }));
+      setForm((p) => ({
+        ...p,
+        title: "",
+        content: "",
+        targetIds: [],
+        imageUrl: "",
+      }));
     },
     onError: (e) => toast.error(e.message),
   });
@@ -201,7 +219,13 @@ export default function Notifications() {
       toast.success("Mensagem enviada");
       await utils.notifications.list.invalidate();
       setOpenCreate(false);
-      setForm((p) => ({ ...p, title: "", content: "", targetIds: [], imageUrl: "" }));
+      setForm((p) => ({
+        ...p,
+        title: "",
+        content: "",
+        targetIds: [],
+        imageUrl: "",
+      }));
     },
     onError: (e) => toast.error(e.message),
   });
@@ -232,7 +256,7 @@ export default function Notifications() {
       return;
     }
 
-    const imageUrl = form.imageUrl?.trim() ? form.imageUrl.trim() : undefined;
+    const mediaUrl = form.imageUrl?.trim() ? form.imageUrl.trim() : undefined;
 
     try {
       if (isOwner) {
@@ -243,7 +267,10 @@ export default function Notifications() {
           return;
         }
 
-        if ((t === "users" || t === "groups" || t === "admins") && form.targetIds.length === 0) {
+        if (
+          (t === "users" || t === "groups" || t === "admins") &&
+          form.targetIds.length === 0
+        ) {
           toast.error("Selecione pelo menos 1 item");
           return;
         }
@@ -260,7 +287,7 @@ export default function Notifications() {
           targetType: t,
           targetIds: t === "tenants" ? ownerTenantIds : form.targetIds,
           tenantId: t === "tenants" ? undefined : tenantId ?? undefined,
-          imageUrl, // ✅ mídia opcional
+          imageUrl: mediaUrl,
         });
 
         return;
@@ -280,7 +307,7 @@ export default function Notifications() {
         priority: form.priority,
         targetType: t,
         targetIds: form.targetIds,
-        imageUrl, // ✅ mídia opcional
+        imageUrl: mediaUrl,
       });
     } catch {
       // toast já tratado no onError
@@ -299,11 +326,22 @@ export default function Notifications() {
     if (t === "users") return ownerUsers;
     if (t === "groups") return ownerGroups;
     if (t === "admins") {
-      const filtered = tenantId ? admins.filter((a: any) => a.tenantId === tenantId) : admins;
+      const filtered = tenantId
+        ? admins.filter((a: any) => a.tenantId === tenantId)
+        : admins;
       return filtered;
     }
     return [];
-  }, [isOwner, form.targetType, myUsers, myGroups, ownerUsers, ownerGroups, admins, tenantId]);
+  }, [
+    isOwner,
+    form.targetType,
+    myUsers,
+    myGroups,
+    ownerUsers,
+    ownerGroups,
+    admins,
+    tenantId,
+  ]);
 
   const audienceLabel = (t: string) => {
     const items = isOwner ? ownerTargets : adminTargets;
@@ -339,7 +377,9 @@ export default function Notifications() {
                 <Filter className="w-4 h-4 text-muted-foreground" />
                 <Select
                   value={tenantId ? String(tenantId) : "all"}
-                  onValueChange={(v) => setTenantId(v === "all" ? null : Number(v))}
+                  onValueChange={(v) =>
+                    setTenantId(v === "all" ? null : Number(v))
+                  }
                 >
                   <SelectTrigger className="w-[240px]">
                     <SelectValue placeholder="Filtrar por tenant" />
@@ -377,7 +417,11 @@ export default function Notifications() {
                         <Select
                           value={String(form.targetType)}
                           onValueChange={(v) => {
-                            setForm((p) => ({ ...p, targetType: v as any, targetIds: [] }));
+                            setForm((p) => ({
+                              ...p,
+                              targetType: v as any,
+                              targetIds: [],
+                            }));
                             setOwnerTenantIds([]);
                           }}
                         >
@@ -399,7 +443,10 @@ export default function Notifications() {
                         <Select
                           value={form.priority}
                           onValueChange={(v) =>
-                            setForm((p) => ({ ...p, priority: v as Priority }))
+                            setForm((p) => ({
+                              ...p,
+                              priority: v as Priority,
+                            }))
                           }
                         >
                           <SelectTrigger>
@@ -444,7 +491,11 @@ export default function Notifications() {
                         <Select
                           value={String(form.targetType)}
                           onValueChange={(v) =>
-                            setForm((p) => ({ ...p, targetType: v as any, targetIds: [] }))
+                            setForm((p) => ({
+                              ...p,
+                              targetType: v as any,
+                              targetIds: [],
+                            }))
                           }
                         >
                           <SelectTrigger>
@@ -465,7 +516,10 @@ export default function Notifications() {
                         <Select
                           value={form.priority}
                           onValueChange={(v) =>
-                            setForm((p) => ({ ...p, priority: v as Priority }))
+                            setForm((p) => ({
+                              ...p,
+                              priority: v as Priority,
+                            }))
                           }
                         >
                           <SelectTrigger>
@@ -487,7 +541,9 @@ export default function Notifications() {
                       <Label>Título</Label>
                       <Input
                         value={form.title}
-                        onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
+                        onChange={(e) =>
+                          setForm((p) => ({ ...p, title: e.target.value }))
+                        }
                       />
                     </div>
 
@@ -495,7 +551,9 @@ export default function Notifications() {
                       <Label>Mensagem</Label>
                       <Textarea
                         value={form.content}
-                        onChange={(e) => setForm((p) => ({ ...p, content: e.target.value }))}
+                        onChange={(e) =>
+                          setForm((p) => ({ ...p, content: e.target.value }))
+                        }
                         className="min-h-[120px]"
                       />
                     </div>
@@ -525,7 +583,9 @@ export default function Notifications() {
                               type="button"
                               variant="outline"
                               size="sm"
-                              onClick={() => setForm((p) => ({ ...p, imageUrl: "" }))}
+                              onClick={() =>
+                                setForm((p) => ({ ...p, imageUrl: "" }))
+                              }
                             >
                               Remover
                             </Button>
@@ -560,14 +620,21 @@ export default function Notifications() {
                       <div className="max-h-[260px] overflow-auto rounded-xl border border-border">
                         <div className="p-3 space-y-2">
                           {tenants.map((t: any) => (
-                            <label key={t.id} className="flex items-center gap-3 py-2">
+                            <label
+                              key={t.id}
+                              className="flex items-center gap-3 py-2"
+                            >
                               <Checkbox
                                 checked={ownerTenantIds.includes(t.id)}
                                 onCheckedChange={() => toggleTenantId(t.id)}
                               />
                               <div className="min-w-0">
-                                <div className="font-medium truncate">{t.name}</div>
-                                <div className="text-xs text-muted-foreground truncate">{t.slug}</div>
+                                <div className="font-medium truncate">
+                                  {t.name}
+                                </div>
+                                <div className="text-xs text-muted-foreground truncate">
+                                  {t.slug}
+                                </div>
                               </div>
                             </label>
                           ))}
@@ -579,22 +646,29 @@ export default function Notifications() {
                         </div>
                       </div>
                     </div>
-                  ) : (form.targetType === "users" ||
-                      form.targetType === "groups" ||
-                      form.targetType === "admins") ? (
+                  ) : form.targetType === "users" ||
+                    form.targetType === "groups" ||
+                    form.targetType === "admins" ? (
                     <div className="space-y-2">
                       <Label>Selecionar</Label>
                       <div className="max-h-[260px] overflow-auto rounded-xl border border-border">
                         <div className="p-3 space-y-2">
                           {audienceList.map((it: any) => (
-                            <label key={it.id} className="flex items-center gap-3 py-2">
+                            <label
+                              key={it.id}
+                              className="flex items-center gap-3 py-2"
+                            >
                               <Checkbox
                                 checked={form.targetIds.includes(it.id)}
                                 onCheckedChange={() => toggleId(it.id)}
                               />
                               <div className="min-w-0">
-                                <div className="font-medium truncate">{formatName(it)}</div>
-                                <div className="text-xs text-muted-foreground truncate">{formatSub(it)}</div>
+                                <div className="font-medium truncate">
+                                  {formatName(it)}
+                                </div>
+                                <div className="text-xs text-muted-foreground truncate">
+                                  {formatSub(it)}
+                                </div>
                               </div>
                             </label>
                           ))}
@@ -609,7 +683,11 @@ export default function Notifications() {
                     </div>
                   ) : null}
 
-                  <Button type="submit" className="w-full gap-2" disabled={isSending}>
+                  <Button
+                    type="submit"
+                    className="w-full gap-2"
+                    disabled={isSending}
+                  >
                     <Send className="w-4 h-4" />
                     {isSending ? "Enviando..." : "Enviar"}
                   </Button>
@@ -624,7 +702,9 @@ export default function Notifications() {
           <div className="p-4 border-b border-border flex items-center justify-between gap-3">
             <div className="font-medium">Enviadas</div>
             <div className="text-sm text-muted-foreground">
-              {listQuery.data?.total ?? (listQuery.data?.data?.length ?? 0)} mensagens
+              {listQuery.data?.total ??
+                (listQuery.data?.data?.length ?? 0)}{" "}
+              mensagens
             </div>
           </div>
 
@@ -677,7 +757,8 @@ export default function Notifications() {
               </div>
             ))}
 
-            {!listQuery.isLoading && asArray<any>(listQuery.data?.data).length === 0 ? (
+            {!listQuery.isLoading &&
+            asArray<any>(listQuery.data?.data).length === 0 ? (
               <div className="p-10 text-center text-sm text-muted-foreground">
                 Nenhuma mensagem enviada ainda.
               </div>
