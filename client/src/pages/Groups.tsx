@@ -72,10 +72,6 @@ export default function Groups() {
   const [memberDraft, setMemberDraft] = useState<number[]>([]);
 
   const setMembersMutation = trpc.groups.setMembers.useMutation({
-    onSuccess: async () => {
-      toast.success("Membros atualizados");
-      await utils.groups.getMembers.invalidate({ groupId: membersGroup?.id ?? 0 });
-    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -97,8 +93,22 @@ export default function Groups() {
 
   const saveMembers = async () => {
     if (!membersGroup) return;
+
     const payload = memberDraft.length ? memberDraft : Array.from(memberIds);
-    await setMembersMutation.mutateAsync({ groupId: membersGroup.id, memberUserIds: payload });
+
+    await setMembersMutation.mutateAsync({
+      groupId: membersGroup.id,
+      memberUserIds: payload,
+    });
+
+    toast.success("Membros atualizados");
+
+    // ✅ garante UI consistente em reaberturas
+    await utils.groups.getMembers.invalidate({ groupId: membersGroup.id });
+    await utils.groups.list.invalidate();
+
+    // ✅ limpa draft pós-save
+    setMemberDraft([]);
   };
 
   return (
@@ -261,9 +271,7 @@ export default function Groups() {
             <div className="mt-4 max-h-[55vh] overflow-auto rounded-xl border border-border">
               <div className="p-3 space-y-2">
                 {membersQuery.isLoading ? (
-                  <div className="p-6 text-center text-sm text-muted-foreground">
-                    Carregando membros...
-                  </div>
+                  <div className="p-6 text-center text-sm text-muted-foreground">Carregando membros...</div>
                 ) : (
                   <>
                     {users.map((u: any) => (
