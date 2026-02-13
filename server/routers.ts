@@ -1,27 +1,30 @@
 import { router } from "./_core/trpc";
 
-import { systemRouter } from "./_core/systemRouter";
 import { authRouter } from "./routers/auth";
-import { notificationsRouter } from "./routers/notifications";
+import { usersRouter } from "./routers/users";
 import { groupsRouter } from "./routers/groups";
-import { filesRouter } from "./routers/files";
+import { notificationsRouter } from "./routers/notifications";
 import { uploadRouter } from "./routers/upload";
 import { tenantRouter } from "./routers/tenant";
 import { superAdminRouter } from "./routers/superadmin";
+import { filesRouter } from "./routers/files";
 
 /**
- * Router principal da aplicação
- * Todas as rotas tRPC passam por aqui
+ * Router principal do backend (AppRouter)
+ * Todos os módulos do sistema são registrados aqui.
  */
 export const appRouter = router({
-  system: systemRouter,        // health/debug
-  auth: authRouter,            // login/logout/me
-  notifications: notificationsRouter,
+  auth: authRouter,
+  users: usersRouter,
   groups: groupsRouter,
-  files: filesRouter,
+  notifications: notificationsRouter,
   upload: uploadRouter,
   tenant: tenantRouter,
-  superadmin: superAdminRouter,
+  superAdmin: superAdminRouter,
+  files: filesRouter,
 });
 
+/**
+ * Tipo do backend para o frontend (tRPC)
+ */
 export type AppRouter = typeof appRouter;
