@@ -17,9 +17,13 @@ interface AuthContextType {
   userData: UserData | null;
   loading: boolean;
   isAuthenticated: boolean;
-  isAdmin: boolean;
+
+  // flags
+  isAdmin: boolean;        // admin com tenant OU owner
   isOwner: boolean;
   isUser: boolean;
+  isTenantAdmin: boolean;  // admin com tenant (somente)
+
   login: (params: {
     loginId: string;
     password: string;
@@ -59,7 +63,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginMutation = trpc.auth.login.useMutation({
     onSuccess: async () => {
-      // invalida o "me" para buscar o usuário com cookie novo
       await utils.auth.me.invalidate();
     },
   });
@@ -91,7 +94,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: email?.trim().toLowerCase() || undefined,
       });
 
-      // garante atualização imediata do estado após login
       await utils.auth.me.refetch();
     },
     [loginMutation, utils.auth.me]
@@ -107,7 +109,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
     } finally {
-      // limpa cache do "me" localmente
       utils.auth.me.setData(undefined, undefined);
       await utils.auth.me.invalidate();
     }
@@ -121,18 +122,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AuthContextType>(() => {
     const role = userData?.role;
+    const tenantId = userData?.tenantId ?? null;
+
+    const isOwner = role === "owner";
+    const isTenantAdmin = role === "admin" && !!tenantId;
+
     return {
       userData,
       loading: meQuery.isLoading || loginMutation.isPending || logoutMutation.isPending,
       isAuthenticated: Boolean(userData),
-      isAdmin: role === "admin" || role === "owner",
-      isOwner: role === "owner",
+
+      // ✅ admin só se for owner OU admin com tenant
+      isAdmin: isOwner || isTenantAdmin,
+      isOwner,
+      isTenantAdmin,
+
       isUser: role === "user",
+
       login,
       logout,
       refresh,
     };
-  }, [userData, meQuery.isLoading, loginMutation.isPending, logoutMutation.isPending, login, logout, refresh]);
+  }, [
+    userData,
+    meQuery.isLoading,
+    loginMutation.isPending,
+    logoutMutation.isPending,
+    login,
+    logout,
+    refresh,
+  ]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
