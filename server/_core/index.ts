@@ -21,10 +21,10 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  // Necessário para cookies funcionarem atrás do proxy (Render)
+  // ✅ Necessário para cookies funcionarem atrás do proxy (Render)
   app.set("trust proxy", 1);
 
-  // Em produção, não deixa subir sem segredos
+  // ✅ Em produção, não deixa subir sem segredos
   if (ENV.isProduction) {
     if (!ENV.cookieSecret) {
       console.error("[ENV] ❌ COOKIE_SECRET não definido em produção. Abortando.");
@@ -39,41 +39,50 @@ async function startServer() {
   /* ============================
      Middlewares essenciais
   ============================ */
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({ limit: "2mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
-  // Cookie parser precisa do segredo correto
+  // ✅ Cookie parser com o mesmo segredo do sdk/jwt (fonte única)
   app.use(cookieParser(ENV.cookieSecret || "dev-cookie-secret"));
 
   /* ============================
      CORS (APENAS PARA API)
-     NÃO aplique CORS no site inteiro,
-     senão quebra /assets e até o próprio frontend.
   ============================ */
-  const appUrl = process.env.APP_URL || ""; // opcional (ex: https://seuapp.onrender.com)
+
+  // ✅ Lista de origins permitidas
+  const allowedOrigins = new Set<string>();
+
+  // Dev
+  allowedOrigins.add("http://localhost:5173");
+  allowedOrigins.add("http://localhost:3000");
+  allowedOrigins.add("http://127.0.0.1:5173");
+  allowedOrigins.add("http://127.0.0.1:3000");
+
+  // Produção / domínio configurado (se existir)
+  if (ENV.appUrl) allowedOrigins.add(ENV.appUrl);
 
   const corsOptions: cors.CorsOptions = {
     origin: (origin, callback) => {
-      // sem origin (curl, apps) -> ok
+      // Sem origin (curl, healthchecks) -> OK
       if (!origin) return callback(null, true);
 
-      // Permite localhost dev
-      if (origin.startsWith("http://localhost")) return callback(null, true);
-
-      // Permite qualquer onrender.com (útil pra preview/ambientes)
+      // Permite qualquer onrender.com (preview / ambientes)
       if (origin.includes(".onrender.com")) return callback(null, true);
 
-      // Permite o domínio configurado (se existir)
-      if (appUrl && origin === appUrl) return callback(null, true);
+      // Permite origins explicitamente listadas
+      if (allowedOrigins.has(origin)) return callback(null, true);
 
-      return callback(new Error("Not allowed by CORS"));
+      return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-trpc-batch", "x-trpc-source"],
   };
 
   /* ============================
      tRPC (com CORS só aqui)
   ============================ */
+  app.options("/api/trpc", cors(corsOptions)); // ✅ preflight explícito
   app.use(
     "/api/trpc",
     cors(corsOptions),
@@ -84,24 +93,29 @@ async function startServer() {
   );
 
   /* ============================
-     OAuth (se estiver usando)
-     (se ele expõe rotas /oauth, também precisa CORS)
+     OAuth (opcional)
   ============================ */
-  app.use("/oauth", cors(corsOptions));
-  registerOAuthRoutes(app);
+  if (ENV.oAuthServerUrl) {
+    app.use("/oauth", cors(corsOptions));
+    registerOAuthRoutes(app);
+  } else {
+    // não registra rota se não tiver OAuth configurado
+    // (evita ruído e chamadas para localhost)
+  }
 
   /* ============================
      FRONTEND ESTÁTICO (dist/public)
   ============================ */
   const publicPath = path.join(__dirname, "public");
 
-  // Arquivos estáticos SEM CORS
+  // ✅ Arquivos estáticos SEM CORS
   app.use(express.static(publicPath));
 
-  // SPA fallback (somente para rotas do frontend)
+  // ✅ SPA fallback (somente para rotas do frontend)
   app.use((req, res, next) => {
     if (req.method !== "GET") return next();
     if (req.path.startsWith("/api")) return next();
+    if (req.path.startsWith("/oauth")) return next();
     if (req.path.includes(".")) return next(); // .js .css .png etc
 
     return res.sendFile(path.join(publicPath, "index.html"));
