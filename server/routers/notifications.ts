@@ -49,16 +49,15 @@ export const notificationsRouter = router({
       const data = await db
         .select()
         .from(notifications)
-        .where(whereClause as any)
+        .where(whereClause)
         .orderBy(sql`${notifications.createdAt} DESC`)
         .limit(input.limit)
         .offset(input.offset);
 
-      // total
       const totalRows = await db
         .select({ count: sql<number>`count(*)` })
         .from(notifications)
-        .where(whereClause as any);
+        .where(whereClause);
 
       return { data, total: Number(totalRows?.[0]?.count ?? 0) };
     }),
@@ -76,7 +75,7 @@ export const notificationsRouter = router({
         targetType: z.enum(["all", "users", "groups"]),
         targetIds: z.array(z.number()).default([]),
         imageUrl: z.string().optional(),
-        videoUrl: z.string().optional(),
+        // ❌ removido: videoUrl (não existe no schema)
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -85,16 +84,13 @@ export const notificationsRouter = router({
       const tenantId = requireTenant(ctx);
       const adminId = ctx.user.id;
 
-      // 1) Resolver destinatários (userIds) com isolamento total
       let userIds: number[] = [];
 
       if (input.targetType === "all") {
         const rows = await db
           .select({ id: users.id })
           .from(users)
-          .where(
-            and(eq(users.tenantId, tenantId), eq(users.role, "user"), eq(users.createdByAdminId, adminId))
-          );
+          .where(and(eq(users.tenantId, tenantId), eq(users.role, "user"), eq(users.createdByAdminId, adminId)));
         userIds = rows.map((r) => r.id);
       }
 
@@ -120,22 +116,14 @@ export const notificationsRouter = router({
       if (input.targetType === "groups") {
         if (!input.targetIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione grupos" });
 
-        // valida grupos do admin
         const validGroups = await db
           .select({ id: groups.id })
           .from(groups)
-          .where(
-            and(
-              eq(groups.tenantId, tenantId),
-              eq(groups.createdByAdminId, adminId),
-              inArray(groups.id, input.targetIds)
-            )
-          );
+          .where(and(eq(groups.tenantId, tenantId), eq(groups.createdByAdminId, adminId), inArray(groups.id, input.targetIds)));
 
         const groupIds = validGroups.map((g) => g.id);
         if (!groupIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Grupos inválidos" });
 
-        // expandir membros
         const members = await db
           .select({ userId: userGroups.userId })
           .from(userGroups)
@@ -147,7 +135,6 @@ export const notificationsRouter = router({
         const memberIds = Array.from(uniq);
         if (!memberIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Grupo sem membros" });
 
-        // validar que todos os membros pertencem ao admin (createdByAdminId)
         const okMembers = await db
           .select({ id: users.id })
           .from(users)
@@ -161,16 +148,13 @@ export const notificationsRouter = router({
           );
 
         userIds = okMembers.map((u) => u.id);
-
-        if (!userIds.length) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Membros inválidos para este admin" });
-        }
+        if (!userIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Membros inválidos para este admin" });
       }
 
       if (!userIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhum destinatário" });
 
-      // 2) Persistir notification + deliveries em transação
       const now = new Date();
+
       const result = await db.transaction(async (tx) => {
         const inserted = await tx
           .insert(notifications)
@@ -206,10 +190,8 @@ export const notificationsRouter = router({
     }),
 
   /**
-   * OWNER: Enviar mensagem (cria notification + deliveries reais)
-   * Suporta:
-   * - por tenant (tenantId obrigatório ou tenants[] quando targetType=tenants)
-   * - destinos: all | users | groups | admins | tenants
+   * OWNER: Enviar mensagem
+   * targetType: all | users | groups | admins | tenants
    */
   ownerSend: ownerOnlyProcedure
     .input(
@@ -221,14 +203,13 @@ export const notificationsRouter = router({
         targetIds: z.array(z.number()).default([]),
         tenantId: z.number().optional(), // obrigatório exceto quando targetType=tenants
         imageUrl: z.string().optional(),
-        videoUrl: z.string().optional(),
+        // ❌ removido: videoUrl (não existe no schema)
       })
     )
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const ownerId = ctx.user.id;
 
-      // resolve lista de tenants alvo
       const tenantIds: number[] =
         input.targetType === "tenants"
           ? Array.from(new Set(input.targetIds))
@@ -238,50 +219,47 @@ export const notificationsRouter = router({
 
       if (!tenantIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione tenant" });
 
-      // validar tenants existem
       const validTenants = await db.select({ id: tenants.id }).from(tenants).where(inArray(tenants.id, tenantIds));
-      const validTenantIds = validTenants.map(t => t.id);
+      const validTenantIds = validTenants.map((t) => t.id);
       if (!validTenantIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Tenants inválidos" });
 
       let totalDeliveries = 0;
       const createdNotificationIds: number[] = [];
 
       for (const tenantId of validTenantIds) {
-        // 1) resolver destinatários
         let userIds: number[] = [];
 
         if (input.targetType === "admins") {
-          // admins do tenant (todos ou ids específicos)
           const where = input.targetIds.length
             ? and(eq(users.tenantId, tenantId), eq(users.role, "admin"), inArray(users.id, input.targetIds))
             : and(eq(users.tenantId, tenantId), eq(users.role, "admin"));
-          const rows = await db.select({ id: users.id }).from(users).where(where as any);
-          userIds = rows.map(r => r.id);
+
+          const rows = await db.select({ id: users.id }).from(users).where(where);
+          userIds = rows.map((r) => r.id);
+
           if (!userIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhum admin encontrado" });
-        } else if (input.targetType === "all") {
-          // todos users comuns do tenant
+        } else if (input.targetType === "all" || input.targetType === "tenants") {
           const rows = await db
             .select({ id: users.id })
             .from(users)
             .where(and(eq(users.tenantId, tenantId), eq(users.role, "user")));
-          userIds = rows.map(r => r.id);
+          userIds = rows.map((r) => r.id);
         } else if (input.targetType === "users") {
           if (!input.targetIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione usuários" });
           const rows = await db
             .select({ id: users.id })
             .from(users)
             .where(and(eq(users.tenantId, tenantId), inArray(users.id, input.targetIds)));
-          userIds = rows.map(r => r.id);
+          userIds = rows.map((r) => r.id);
         } else if (input.targetType === "groups") {
           if (!input.targetIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione grupos" });
 
-          // valida grupos do tenant
           const validGroups = await db
             .select({ id: groups.id })
             .from(groups)
             .where(and(eq(groups.tenantId, tenantId), inArray(groups.id, input.targetIds)));
 
-          const groupIds = validGroups.map(g => g.id);
+          const groupIds = validGroups.map((g) => g.id);
           if (!groupIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Grupos inválidos" });
 
           const members = await db
@@ -300,21 +278,21 @@ export const notificationsRouter = router({
             .from(users)
             .where(and(eq(users.tenantId, tenantId), eq(users.role, "user"), inArray(users.id, memberIds)));
 
-          userIds = rows.map(r => r.id);
-        } else if (input.targetType === "tenants") {
-          // já iterando por tenant; equivale a "all"
-          const rows = await db
-            .select({ id: users.id })
-            .from(users)
-            .where(and(eq(users.tenantId, tenantId), eq(users.role, "user")));
-          userIds = rows.map(r => r.id);
+          userIds = rows.map((r) => r.id);
         }
 
         if (!userIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhum destinatário" });
 
-        // 2) persistir em transação
         const now = new Date();
+
         const result = await db.transaction(async (tx) => {
+          const mappedTargetType =
+            input.targetType === "admins" ? "users" : input.targetType === "tenants" ? "all" : (input.targetType as any);
+
+          // ✅ targetIds no banco só fazem sentido para users/groups
+          const mappedTargetIds =
+            input.targetType === "tenants" ? [] : input.targetIds;
+
           const inserted = await tx
             .insert(notifications)
             .values({
@@ -323,14 +301,8 @@ export const notificationsRouter = router({
               content: input.content,
               priority: input.priority,
               createdBy: ownerId,
-              // DB só aceita all|users|groups — mapeia admins->users, tenants->all
-              targetType:
-                input.targetType === "admins"
-                  ? "users"
-                  : input.targetType === "tenants"
-                    ? "all"
-                    : (input.targetType as any),
-              targetIds: input.targetIds,
+              targetType: mappedTargetType,
+              targetIds: mappedTargetIds,
               imageUrl: input.imageUrl,
               isScheduled: false,
               isActive: true,
@@ -346,6 +318,7 @@ export const notificationsRouter = router({
             status: "sent" as const,
             isRead: false,
           }));
+
           await tx.insert(deliveries).values(rows);
           return { notificationId, deliveries: rows.length };
         });
@@ -358,17 +331,10 @@ export const notificationsRouter = router({
     }),
 
   /**
-   * USER/ADMIN: Inbox (mensagens recebidas)
-   * - user: vê sempre
-   * - admin: só verá se receber delivery real (ex.: owner enviou para admins)
+   * Inbox (mensagens recebidas)
    */
   inboxList: protectedProcedure
-    .input(
-      z.object({
-        limit: z.number().default(50),
-        offset: z.number().default(0),
-      })
-    )
+    .input(z.object({ limit: z.number().default(50), offset: z.number().default(0) }))
     .query(async ({ ctx, input }) => {
       const db = await requireDb();
 
@@ -393,14 +359,11 @@ export const notificationsRouter = router({
         })
         .from(deliveries)
         .innerJoin(notifications, eq(deliveries.notificationId, notifications.id))
-        .where(
-          and(eq(deliveries.userId, ctx.user.id), eq(deliveries.tenantId, notifications.tenantId))
-        )
+        .where(and(eq(deliveries.userId, ctx.user.id), eq(deliveries.tenantId, notifications.tenantId)))
         .orderBy(desc(deliveries.id))
         .limit(input.limit)
         .offset(input.offset);
 
-      // total
       const totalRows = await db
         .select({ count: sql<number>`count(*)` })
         .from(deliveries)
@@ -421,13 +384,9 @@ export const notificationsRouter = router({
       .from(deliveries)
       .where(and(eq(deliveries.userId, ctx.user.id), eq(deliveries.isRead, false)));
 
-    const value = rows?.[0]?.count ?? 0;
-    return { count: Number(value ?? 0) };
+    return { count: Number(rows?.[0]?.count ?? 0) };
   }),
 
-  /**
-   * USER/ADMIN: marcar como lida
-   */
   markAsRead: protectedProcedure
     .input(z.object({ deliveryId: z.number() }))
     .mutation(async ({ ctx, input }) => {
@@ -445,16 +404,8 @@ export const notificationsRouter = router({
       return { success: true };
     }),
 
-  /**
-   * USER/ADMIN: feedback (gostei / renovar / não gostei)
-   */
   setFeedback: protectedProcedure
-    .input(
-      z.object({
-        deliveryId: z.number(),
-        feedback: z.enum(["liked", "renew", "disliked"]),
-      })
-    )
+    .input(z.object({ deliveryId: z.number(), feedback: z.enum(["liked", "renew", "disliked"]) }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
 
@@ -472,10 +423,7 @@ export const notificationsRouter = router({
 
       await db
         .update(deliveries)
-        .set({
-          feedback: input.feedback,
-          feedbackAt: new Date(),
-        })
+        .set({ feedback: input.feedback, feedbackAt: new Date() })
         .where(eq(deliveries.id, input.deliveryId));
 
       return { success: true };
