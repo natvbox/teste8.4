@@ -1,268 +1,243 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
 import { getDb } from "../db";
-import { files, InsertFile } from "../../drizzle/schema";
-import { storagePut, storageGet } from "../storage";
-import { eq } from "drizzle-orm";
+import { files } from "../../drizzle/schema";
+import { storageGet } from "../storage";
+import { and, eq, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { nanoid } from "nanoid";
+
+function requireDbOrThrow(db: any) {
+  if (!db) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Banco de dados não disponível",
+    });
+  }
+}
+
+function requireTenantId(ctx: any): number {
+  const tid = ctx.user?.tenantId;
+  if (!tid) throw new TRPCError({ code: "FORBIDDEN", message: "Sem tenant" });
+  return tid;
+}
 
 export const filesRouter = router({
-  upload: protectedProcedure
+  /**
+   * ✅ IMPORTANTE:
+   * Upload de arquivo NÃO deve ser feito por tRPC com Buffer.
+   * Use o uploadRouter (REST/multipart) e grave apenas o metadata aqui.
+   */
+  createMetadata: protectedProcedure
     .input(
       z.object({
-        filename: z.string().min(1, "Nome do arquivo é obrigatório"),
-        fileData: z.instanceof(Buffer),
-        mimeType: z.string().default("application/octet-stream"),
+        tenantId: z.number().optional(), // owner pode escolher
+        filename: z.string().min(1),
+        fileKey: z.string().min(1),
+        url: z.string().min(1),
+        mimeType: z.string().optional(),
+        fileSize: z.number().int().nonnegative().optional(),
         relatedNotificationId: z.number().optional(),
         isPublic: z.boolean().default(true),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
-      if (!db) {
+      requireDbOrThrow(db);
+
+      const role = ctx.user.role;
+
+      // tenant alvo:
+      // - owner: pode escolher tenantId (obrigatório para salvar com consistência)
+      // - admin/user: sempre o tenantId do usuário
+      const tenantId =
+        role === "owner"
+          ? input.tenantId
+          : requireTenantId(ctx);
+
+      if (!tenantId) {
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Banco de dados não disponível",
+          code: "BAD_REQUEST",
+          message: "tenantId é obrigatório (owner deve informar)",
         });
       }
 
-      try {
-        const fileKey = `${ctx.user.id}-files/${nanoid()}-${input.filename}`;
-        const { url } = await storagePut(fileKey, input.fileData, input.mimeType);
-
-        const newFile: InsertFile = {
-          tenantId: ctx.user.tenantId || 0,
+      const inserted = await db
+        .insert(files)
+        .values({
+          tenantId,
           filename: input.filename,
-          fileKey: fileKey,
-          url: url,
-          mimeType: input.mimeType,
-          fileSize: input.fileData.length,
+          fileKey: input.fileKey,
+          url: input.url,
+          mimeType: input.mimeType ?? null,
+          fileSize: input.fileSize ?? null,
           uploadedBy: ctx.user.id,
-          relatedNotificationId: input.relatedNotificationId,
+          uploadedAt: new Date(),
+          relatedNotificationId: input.relatedNotificationId ?? null,
           isPublic: input.isPublic,
-        };
+        } as any)
+        .returning({ id: files.id });
 
-        const result = await db.insert(files).values(newFile).returning({ id: files.id });
-
-        return {
-          success: true,
-          message: "Arquivo enviado com sucesso",
-          url: url,
-          fileKey: fileKey,
-          id: result[0]?.id || 0,
-        };
-      } catch (error) {
-        console.error("[Files] Erro ao fazer upload:", error);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Erro ao fazer upload do arquivo",
-        });
-      }
+      return {
+        success: true,
+        id: inserted[0]?.id || 0,
+      };
     }),
 
   list: protectedProcedure
     .input(
       z.object({
-        limit: z.number().default(20),
-        offset: z.number().default(0),
+        limit: z.number().min(1).max(200).default(20),
+        offset: z.number().min(0).default(0),
+        tenantId: z.number().optional().nullable(), // owner pode filtrar
       })
     )
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      if (!db) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Banco de dados não disponível",
-        });
-      }
+      requireDbOrThrow(db);
 
-      try {
-        const isAdmin = ctx.user.role === "admin" || ctx.user.role === "owner";
-        
-        let query;
-        if (isAdmin) {
-          query = await db
-            .select()
-            .from(files)
-            .limit(input.limit)
-            .offset(input.offset);
-        } else {
-          query = await db
-            .select()
-            .from(files)
-            .where(eq(files.uploadedBy, ctx.user.id))
-            .limit(input.limit)
-            .offset(input.offset);
+      const role = ctx.user.role;
+
+      // regras:
+      // - owner: pode ver tudo, opcionalmente filtrar por tenantId
+      // - admin: só do próprio tenant
+      // - user: só o que ele enviou + do tenant dele
+      let whereClause: any = undefined;
+
+      if (role === "owner") {
+        if (input.tenantId) {
+          whereClause = eq(files.tenantId, input.tenantId);
         }
-
-        return {
-          success: true,
-          data: query,
-          total: query.length,
-        };
-      } catch (error) {
-        console.error("[Files] Erro ao listar:", error);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Erro ao listar arquivos",
-        });
+      } else if (role === "admin") {
+        const tid = requireTenantId(ctx);
+        whereClause = eq(files.tenantId, tid);
+      } else {
+        const tid = requireTenantId(ctx);
+        whereClause = and(eq(files.tenantId, tid), eq(files.uploadedBy, ctx.user.id));
       }
+
+      const data = await db
+        .select()
+        .from(files)
+        .where(whereClause)
+        .orderBy(sql`${files.id} DESC`)
+        .limit(input.limit)
+        .offset(input.offset);
+
+      const totalRows = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(files)
+        .where(whereClause);
+
+      return {
+        success: true,
+        data,
+        total: Number(totalRows?.[0]?.count ?? 0),
+      };
     }),
 
   getDownloadUrl: protectedProcedure
     .input(z.number())
     .query(async ({ ctx, input: fileId }) => {
       const db = await getDb();
-      if (!db) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Banco de dados não disponível",
-        });
+      requireDbOrThrow(db);
+
+      const rows = await db.select().from(files).where(eq(files.id, fileId)).limit(1);
+      if (!rows.length) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Arquivo não encontrado" });
       }
 
-      try {
-        const result = await db
-          .select()
-          .from(files)
-          .where(eq(files.id, fileId))
-          .limit(1);
+      const file = rows[0];
 
-        if (result.length === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Arquivo não encontrado",
-          });
+      // autorização:
+      // - owner: ok
+      // - admin: só do tenant dele
+      // - user: se uploadedBy dele OU isPublic
+      if (ctx.user.role === "owner") {
+        // ok
+      } else if (ctx.user.role === "admin") {
+        const tid = requireTenantId(ctx);
+        if (file.tenantId !== tid) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
         }
-
-        const file = result[0];
-
-        if (
-          ctx.user.role !== "admin" &&
-          ctx.user.role !== "owner" &&
-          file.uploadedBy !== ctx.user.id &&
-          !file.isPublic
-        ) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Você não tem permissão para acessar este arquivo",
-          });
+      } else {
+        const tid = requireTenantId(ctx);
+        const sameTenant = file.tenantId === tid;
+        const canRead = file.uploadedBy === ctx.user.id || file.isPublic;
+        if (!sameTenant || !canRead) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Você não tem permissão para acessar este arquivo" });
         }
-
-        const { url } = await storageGet(file.fileKey);
-
-        return {
-          success: true,
-          url: url,
-          filename: file.filename,
-        };
-      } catch (error) {
-        console.error("[Files] Erro ao obter URL:", error);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Erro ao obter URL de download",
-        });
       }
+
+      const { url } = await storageGet(file.fileKey);
+
+      return { success: true, url, filename: file.filename };
     }),
 
   delete: protectedProcedure
     .input(z.number())
     .mutation(async ({ ctx, input: fileId }) => {
       const db = await getDb();
-      if (!db) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Banco de dados não disponível",
-        });
+      requireDbOrThrow(db);
+
+      const rows = await db.select().from(files).where(eq(files.id, fileId)).limit(1);
+      if (!rows.length) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Arquivo não encontrado" });
       }
 
-      try {
-        const result = await db
-          .select()
-          .from(files)
-          .where(eq(files.id, fileId))
-          .limit(1);
+      const file = rows[0];
 
-        if (result.length === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Arquivo não encontrado",
-          });
+      // autorização:
+      // - owner: ok
+      // - admin: só do tenant dele
+      // - user: só se uploadedBy dele
+      if (ctx.user.role === "owner") {
+        // ok
+      } else if (ctx.user.role === "admin") {
+        const tid = requireTenantId(ctx);
+        if (file.tenantId !== tid) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
+      } else {
+        const tid = requireTenantId(ctx);
+        if (file.tenantId !== tid || file.uploadedBy !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Você não tem permissão para deletar este arquivo" });
         }
-
-        const file = result[0];
-
-        if (ctx.user.role !== "admin" && ctx.user.role !== "owner" && file.uploadedBy !== ctx.user.id) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Você não tem permissão para deletar este arquivo",
-          });
-        }
-
-        await db.delete(files).where(eq(files.id, fileId));
-
-        return {
-          success: true,
-          message: "Arquivo deletado com sucesso",
-        };
-      } catch (error) {
-        console.error("[Files] Erro ao deletar:", error);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Erro ao deletar arquivo",
-        });
       }
+
+      // remove do banco (e o storage deve ser removido pelo uploadRouter/storageDelete, se existir)
+      await db.delete(files).where(eq(files.id, fileId));
+
+      return { success: true, message: "Arquivo deletado com sucesso" };
     }),
 
   getById: protectedProcedure
     .input(z.number())
     .query(async ({ ctx, input: fileId }) => {
       const db = await getDb();
-      if (!db) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Banco de dados não disponível",
-        });
+      requireDbOrThrow(db);
+
+      const rows = await db.select().from(files).where(eq(files.id, fileId)).limit(1);
+      if (!rows.length) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Arquivo não encontrado" });
       }
 
-      try {
-        const result = await db
-          .select()
-          .from(files)
-          .where(eq(files.id, fileId))
-          .limit(1);
+      const file = rows[0];
 
-        if (result.length === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Arquivo não encontrado",
-          });
-        }
-
-        const file = result[0];
-
-        if (
-          ctx.user.role !== "admin" &&
-          ctx.user.role !== "owner" &&
-          file.uploadedBy !== ctx.user.id &&
-          !file.isPublic
-        ) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Você não tem permissão para acessar este arquivo",
-          });
-        }
-
-        return {
-          success: true,
-          data: file,
-        };
-      } catch (error) {
-        console.error("[Files] Erro ao obter:", error);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Erro ao obter arquivo",
-        });
+      if (ctx.user.role === "owner") {
+        return { success: true, data: file };
       }
+
+      if (ctx.user.role === "admin") {
+        const tid = requireTenantId(ctx);
+        if (file.tenantId !== tid) throw new TRPCError({ code: "FORBIDDEN", message: "Sem permissão" });
+        return { success: true, data: file };
+      }
+
+      const tid = requireTenantId(ctx);
+      const sameTenant = file.tenantId === tid;
+      const canRead = file.uploadedBy === ctx.user.id || file.isPublic;
+      if (!sameTenant || !canRead) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Você não tem permissão para acessar este arquivo" });
+      }
+
+      return { success: true, data: file };
     }),
 });
