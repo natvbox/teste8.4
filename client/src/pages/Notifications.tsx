@@ -32,6 +32,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/contexts/AuthContext";
+import { FileUploader } from "@/components/FileUploader";
 
 type Priority = "normal" | "important" | "urgent";
 type AdminTarget = "all" | "users" | "groups";
@@ -40,7 +41,7 @@ type OwnerTarget = "all" | "users" | "groups" | "admins" | "tenants";
 function asArray<T = any>(val: any): T[] {
   if (!val) return [];
   if (Array.isArray(val)) return val as T[];
-  if (typeof val === "object" && Array.isArray(val.data)) return val.data as T[];
+  if (typeof val === "object" && Array.isArray((val as any).data)) return (val as any).data as T[];
   return [];
 }
 
@@ -68,6 +69,28 @@ function formatSub(it: any) {
   return "";
 }
 
+function isLikelyVideoUrl(url: string) {
+  const u = url.toLowerCase();
+  return (
+    u.includes(".mp4") ||
+    u.includes(".webm") ||
+    u.includes(".ogg") ||
+    u.includes("video")
+  );
+}
+
+function isLikelyImageUrl(url: string) {
+  const u = url.toLowerCase();
+  return (
+    u.includes(".png") ||
+    u.includes(".jpg") ||
+    u.includes(".jpeg") ||
+    u.includes(".gif") ||
+    u.includes(".webp") ||
+    u.includes("image")
+  );
+}
+
 export default function Notifications() {
   const { isOwner, userData } = useAuth();
   const utils = trpc.useUtils();
@@ -84,6 +107,7 @@ export default function Notifications() {
     priority: "normal" as Priority,
     targetType: (isOwner ? "all" : "all") as AdminTarget | OwnerTarget,
     targetIds: [] as number[],
+    imageUrl: "" as string, // ✅ serve para imagem OU vídeo (schema tem imageUrl)
   });
 
   // Se role mudar (ex: after me refetch), mantém targetType compatível
@@ -167,7 +191,7 @@ export default function Notifications() {
       toast.success("Mensagem enviada");
       await utils.notifications.list.invalidate();
       setOpenCreate(false);
-      setForm((p) => ({ ...p, title: "", content: "", targetIds: [] }));
+      setForm((p) => ({ ...p, title: "", content: "", targetIds: [], imageUrl: "" }));
     },
     onError: (e) => toast.error(e.message),
   });
@@ -177,7 +201,7 @@ export default function Notifications() {
       toast.success("Mensagem enviada");
       await utils.notifications.list.invalidate();
       setOpenCreate(false);
-      setForm((p) => ({ ...p, title: "", content: "", targetIds: [] }));
+      setForm((p) => ({ ...p, title: "", content: "", targetIds: [], imageUrl: "" }));
     },
     onError: (e) => toast.error(e.message),
   });
@@ -208,6 +232,8 @@ export default function Notifications() {
       return;
     }
 
+    const imageUrl = form.imageUrl?.trim() ? form.imageUrl.trim() : undefined;
+
     try {
       if (isOwner) {
         const t = form.targetType as OwnerTarget;
@@ -234,6 +260,7 @@ export default function Notifications() {
           targetType: t,
           targetIds: t === "tenants" ? ownerTenantIds : form.targetIds,
           tenantId: t === "tenants" ? undefined : tenantId ?? undefined,
+          imageUrl, // ✅ mídia opcional
         });
 
         return;
@@ -253,6 +280,7 @@ export default function Notifications() {
         priority: form.priority,
         targetType: t,
         targetIds: form.targetIds,
+        imageUrl, // ✅ mídia opcional
       });
     } catch {
       // toast já tratado no onError
@@ -473,6 +501,58 @@ export default function Notifications() {
                     </div>
                   </div>
 
+                  {/* Upload (imagem/vídeo) */}
+                  <div className="space-y-2">
+                    <Label>Anexo (opcional)</Label>
+                    <div className="rounded-xl border border-border p-3 space-y-3">
+                      <FileUploader
+                        accept="image/*,video/*"
+                        maxFiles={1}
+                        autoUpload
+                        onUploadComplete={(_, publicUrl) => {
+                          setForm((p) => ({ ...p, imageUrl: publicUrl }));
+                          toast.success("Arquivo anexado");
+                        }}
+                      />
+
+                      {form.imageUrl ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-xs text-muted-foreground break-all">
+                              {form.imageUrl}
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setForm((p) => ({ ...p, imageUrl: "" }))}
+                            >
+                              Remover
+                            </Button>
+                          </div>
+
+                          {isLikelyVideoUrl(form.imageUrl) ? (
+                            <video
+                              src={form.imageUrl}
+                              controls
+                              className="w-full max-h-[260px] rounded-xl border border-border"
+                            />
+                          ) : isLikelyImageUrl(form.imageUrl) ? (
+                            <img
+                              src={form.imageUrl}
+                              alt="Anexo"
+                              className="w-full max-h-[260px] object-contain rounded-xl border border-border"
+                            />
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-muted-foreground">
+                          Você pode anexar 1 imagem ou 1 vídeo.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                   {/* Selection lists */}
                   {isOwner && (form.targetType as OwnerTarget) === "tenants" ? (
                     <div className="space-y-2">
@@ -554,7 +634,7 @@ export default function Notifications() {
                 key={n.id}
                 className="p-4 flex flex-col sm:flex-row sm:items-start justify-between gap-3"
               >
-                <div className="min-w-0">
+                <div className="min-w-0 w-full">
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="font-semibold truncate">{n.title}</div>
                     {priorityBadge(n.priority)}
@@ -563,11 +643,30 @@ export default function Notifications() {
                         <Building2 className="w-3 h-3" /> Tenant #{n.tenantId}
                       </Badge>
                     ) : null}
+                    {n.imageUrl ? <Badge variant="outline">ANEXO</Badge> : null}
                   </div>
 
                   <div className="text-sm text-muted-foreground mt-1 line-clamp-2">
                     {n.content}
                   </div>
+
+                  {n.imageUrl ? (
+                    <div className="mt-3">
+                      {isLikelyVideoUrl(n.imageUrl) ? (
+                        <video
+                          src={n.imageUrl}
+                          controls
+                          className="w-full max-h-[260px] rounded-xl border border-border"
+                        />
+                      ) : (
+                        <img
+                          src={n.imageUrl}
+                          alt="Anexo"
+                          className="w-full max-h-[260px] object-contain rounded-xl border border-border"
+                        />
+                      )}
+                    </div>
+                  ) : null}
 
                   <div className="mt-2 text-xs text-muted-foreground">
                     {n.createdAt ? new Date(n.createdAt).toLocaleString() : ""}
