@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -32,7 +33,7 @@ import {
   Users as UsersIcon,
   KeyRound,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 type Role = "user" | "admin" | "owner";
@@ -165,8 +166,15 @@ export default function Users() {
   );
 
   const setUserGroups = trpc.tenant.setUserGroups.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("Grupos atualizados");
+
+      if (groupsUser?.id) {
+        await utils.tenant.getUserGroups.invalidate({ id: groupsUser.id });
+      }
+      // garante consistência caso você use groups.getMembers em outros lugares
+      await utils.groups.list.invalidate();
+
       setGroupsUser(null);
       setSelectedGroupIds([]);
     },
@@ -175,17 +183,10 @@ export default function Users() {
 
   // ===== Effects =====
   useEffect(() => {
-    if (getUserGroups.data?.groupIds && groupsUser) {
+    if (groupsUser && getUserGroups.data?.groupIds) {
       setSelectedGroupIds(getUserGroups.data.groupIds);
     }
   }, [getUserGroups.data, groupsUser]);
-
-  const groupsById = useMemo(() => {
-    const arr = groupsList?.data ?? [];
-    const map = new Map<number, any>();
-    for (const g of arr) map.set(g.id, g);
-    return map;
-  }, [groupsList?.data]);
 
   // ===== Handlers =====
   const handleCreate = (e: React.FormEvent) => {
@@ -514,6 +515,7 @@ export default function Users() {
                                   variant="outline"
                                   onClick={() => handleOwnerRebaixarAdmin(user.id)}
                                   className="border-2 text-destructive hover:bg-destructive/10"
+                                  title="Rebaixar admin"
                                 >
                                   <Shield className="w-4 h-4" />
                                 </Button>
@@ -606,7 +608,7 @@ export default function Users() {
                 />
               </div>
 
-              {/* Owner pode alterar role/tenant (mantém como era) */}
+              {/* Owner pode alterar role/tenant */}
               {isOwner && (
                 <>
                   <div className="space-y-2">
@@ -663,7 +665,15 @@ export default function Users() {
         </Dialog>
 
         {/* Groups Dialog (Admin tenant) */}
-        <Dialog open={!!groupsUser} onOpenChange={(open) => !open && setGroupsUser(null)}>
+        <Dialog
+          open={!!groupsUser}
+          onOpenChange={(open) => {
+            if (!open) {
+              setGroupsUser(null);
+              setSelectedGroupIds([]);
+            }
+          }}
+        >
           <DialogContent className="bg-card border-2 border-border max-w-xl">
             <DialogHeader>
               <DialogTitle className="text-2xl mono">GRUPOS DO USUÁRIO</DialogTitle>
@@ -671,7 +681,10 @@ export default function Users() {
 
             <div className="space-y-3">
               <div className="text-sm text-muted-foreground">
-                Usuário: <span className="font-medium text-foreground">{groupsUser?.name || groupsUser?.openId}</span>
+                Usuário:{" "}
+                <span className="font-medium text-foreground">
+                  {groupsUser?.name || groupsUser?.openId}
+                </span>
               </div>
 
               <div className="border-2 border-border p-3 bg-secondary/30 max-h-[320px] overflow-auto">
@@ -680,17 +693,18 @@ export default function Users() {
                     {groupsList.data.map((g: any) => (
                       <label
                         key={g.id}
-                        className="flex items-center gap-2 p-2 border border-border bg-card hover:bg-secondary/40 cursor-pointer"
+                        className="flex items-center gap-3 p-2 border border-border bg-card hover:bg-secondary/40 cursor-pointer"
                       >
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={selectedGroupIds.includes(g.id)}
-                          onChange={() => toggleGroup(g.id)}
+                          onCheckedChange={() => toggleGroup(g.id)}
                         />
-                        <div className="flex-1">
-                          <div className="font-medium">{g.name}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium truncate">{g.name}</div>
                           {g.description ? (
-                            <div className="text-xs text-muted-foreground">{g.description}</div>
+                            <div className="text-xs text-muted-foreground truncate">
+                              {g.description}
+                            </div>
                           ) : null}
                         </div>
                         <Badge variant="outline">#{g.id}</Badge>
@@ -721,7 +735,15 @@ export default function Users() {
         </Dialog>
 
         {/* Reset Password Dialog (Admin tenant) */}
-        <Dialog open={!!resetUser} onOpenChange={(open) => !open && setResetUser(null)}>
+        <Dialog
+          open={!!resetUser}
+          onOpenChange={(open) => {
+            if (!open) {
+              setResetUser(null);
+              setNewPassword("");
+            }
+          }}
+        >
           <DialogContent className="bg-card border-2 border-border max-w-md">
             <DialogHeader>
               <DialogTitle className="text-2xl mono">RESETAR SENHA</DialogTitle>
@@ -729,7 +751,10 @@ export default function Users() {
 
             <form onSubmit={doResetPassword} className="space-y-4">
               <div className="text-sm text-muted-foreground">
-                Usuário: <span className="font-medium text-foreground">{resetUser?.name || resetUser?.openId}</span>
+                Usuário:{" "}
+                <span className="font-medium text-foreground">
+                  {resetUser?.name || resetUser?.openId}
+                </span>
               </div>
 
               <div className="space-y-2">
@@ -741,9 +766,7 @@ export default function Users() {
                   className="border-2"
                   placeholder="Digite a nova senha"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Use apenas letras, números e ; . _ -
-                </p>
+                <p className="text-xs text-muted-foreground">Use apenas letras, números e ; . _ -</p>
               </div>
 
               <div className="flex justify-end gap-2">
