@@ -1,4 +1,3 @@
-// client/src/hooks/useFileUpload.ts
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
 import { toast } from "sonner";
@@ -16,6 +15,10 @@ export interface UploadResult {
   error?: string;
 }
 
+/**
+ * Hook de upload via tRPC.
+ * ✅ Suporta owner via tenantId opcional (backend exige tenantId quando role=owner).
+ */
 export function useFileUpload() {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<UploadProgress>({
@@ -26,20 +29,18 @@ export function useFileUpload() {
 
   const uploadMutation = trpc.upload.upload.useMutation();
 
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
       reader.onload = () => resolve(reader.result as string);
       reader.onerror = (error) => reject(error);
     });
-  };
 
-  // ✅ ADICIONADO: tenantId?: number (necessário pro owner)
   const uploadFile = async (
     file: File,
     relatedNotificationId?: number,
-    tenantId?: number
+    tenantId?: number // ✅ necessário para owner (quando for enviar anexo pelo painel owner)
   ): Promise<UploadResult> => {
     try {
       setUploading(true);
@@ -53,6 +54,9 @@ export function useFileUpload() {
         "video/mp4",
         "video/webm",
         "video/quicktime",
+        "audio/mpeg",
+        "audio/wav",
+        "audio/ogg",
       ];
 
       if (!allowedTypes.includes(file.type)) {
@@ -61,7 +65,7 @@ export function useFileUpload() {
         return { success: false, error: "Tipo de arquivo não permitido" };
       }
 
-      const maxSize = 100 * 1024 * 1024;
+      const maxSize = 100 * 1024 * 1024; // 100MB
       if (file.size > maxSize) {
         toast.error("Arquivo muito grande (máximo 100MB)");
         setUploading(false);
@@ -79,24 +83,25 @@ export function useFileUpload() {
         fileData: base64Data,
         mimeType: file.type,
         relatedNotificationId,
-
-        // ✅ NOVO: manda tenantId quando existir (owner)
-        tenantId,
+        tenantId, // ✅ se undefined, backend ignora (admin/user) ou bloqueia (owner)
       });
 
       if (result.success) {
         toast.success("Arquivo enviado com sucesso");
         setProgress({ loaded: file.size, total: file.size, percentage: 100 });
         setUploading(false);
+
         return {
           success: true,
           fileId:
-            typeof result.fileId === "bigint" ? Number(result.fileId) : result.fileId,
+            typeof result.fileId === "bigint"
+              ? Number(result.fileId)
+              : result.fileId,
           publicUrl: result.url,
         };
-      } else {
-        throw new Error("Erro no upload");
       }
+
+      throw new Error("Erro no upload");
     } catch (error) {
       console.error("Erro no upload:", error);
 
