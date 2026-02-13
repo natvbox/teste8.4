@@ -1,47 +1,43 @@
 import { useState } from "react";
-import { trpc } from "../lib/trpcClient";
+import { trpc } from "../lib/trpc";
+import { toast } from "sonner";
 
-interface UploadProgress {
-  percentage: number;
+export interface UploadProgress {
   loaded: number;
   total: number;
+  percentage: number;
 }
 
-interface UploadResult {
+export interface UploadResult {
   success: boolean;
   fileId?: number;
   publicUrl?: string;
   error?: string;
 }
 
-export function useFileUpload() {
-  const uploadMutation = trpc.upload.upload.useMutation();
+// remove "data:mime;base64," se vier DataURL
+function stripDataUrlPrefix(dataUrl: string) {
+  const idx = dataUrl.indexOf("base64,");
+  if (idx >= 0) return dataUrl.slice(idx + "base64,".length);
+  return dataUrl;
+}
 
+export function useFileUpload() {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<UploadProgress>({
-    percentage: 0,
     loaded: 0,
     total: 0,
+    percentage: 0,
   });
 
-  const resetProgress = () => {
-    setProgress({
-      percentage: 0,
-      loaded: 0,
-      total: 0,
-    });
-  };
+  const uploadMutation = trpc.upload.upload.useMutation();
 
-  const fileToBase64 = (file: File): Promise<string> =>
+  const fileToDataUrl = (file: File): Promise<string> =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
-
-      reader.onload = () => {
-        resolve(reader.result as string);
-      };
-
-      reader.onerror = reject;
       reader.readAsDataURL(file);
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = (error) => reject(error);
     });
 
   const uploadFile = async (
@@ -50,56 +46,90 @@ export function useFileUpload() {
   ): Promise<UploadResult> => {
     try {
       setUploading(true);
-      resetProgress();
+      setProgress({ loaded: 0, total: file.size, percentage: 5 });
 
-      // 🔥 Simula progresso enquanto converte para base64
-      setProgress({
-        percentage: 10,
-        loaded: 0,
-        total: file.size,
-      });
+      // ✅ Mantém só imagem/vídeo (coerente com FileUploader)
+      const allowedTypes = [
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "video/mp4",
+        "video/webm",
+        "video/quicktime",
+      ];
 
-      const base64 = await fileToBase64(file);
+      if (!allowedTypes.includes(file.type)) {
+        const msg = "Tipo de arquivo não permitido";
+        toast.error(msg);
+        return { success: false, error: msg };
+      }
 
-      setProgress({
-        percentage: 40,
-        loaded: file.size * 0.4,
-        total: file.size,
-      });
+      const maxSize = 100 * 1024 * 1024; // 100MB
+      if (file.size > maxSize) {
+        const msg = "Arquivo muito grande (máximo 100MB)";
+        toast.error(msg);
+        return { success: false, error: msg };
+      }
+
+      setProgress((p) => ({ ...p, percentage: 15 }));
+
+      // ⚠️ ainda é base64 via tRPC (vamos migrar depois para multipart/presigned)
+      const dataUrl = await fileToDataUrl(file);
+      const base64 = stripDataUrlPrefix(dataUrl);
+
+      setProgress((p) => ({ ...p, percentage: 55 }));
 
       const result = await uploadMutation.mutateAsync({
         filename: file.name,
-        fileData: base64,
+        fileData: base64, // ✅ manda base64 puro (menos payload)
         mimeType: file.type,
         relatedNotificationId,
       });
 
-      setProgress({
-        percentage: 100,
-        loaded: file.size,
-        total: file.size,
-      });
+      if (result?.success) {
+        setProgress({ loaded: file.size, total: file.size, percentage: 100 });
+        toast.success("Arquivo enviado com sucesso");
 
-      return {
-        success: true,
-        fileId: result.fileId,
-        publicUrl: result.url,
-      };
-    } catch (error: any) {
+        return {
+          success: true,
+          fileId: result.fileId ? Number(result.fileId) : undefined,
+          publicUrl: result.url,
+        };
+      }
+
+      // se o backend retornar {success:false, error:"..."}
+      const backendMsg =
+        (result as any)?.error || "Erro no upload";
+
+      toast.error(backendMsg);
+      return { success: false, error: backendMsg };
+    } catch (error) {
       console.error("Erro no upload:", error);
-
-      return {
-        success: false,
-        error: error?.message || "Erro no upload",
-      };
+      const msg = error instanceof Error ? error.message : "Erro ao enviar arquivo";
+      toast.error(msg);
+      return { success: false, error: msg };
     } finally {
       setUploading(false);
-      setTimeout(resetProgress, 800);
     }
+  };
+
+  const uploadMultipleFiles = async (
+    files: File[],
+    relatedNotificationId?: number
+  ): Promise<UploadResult[]> => {
+    const results: UploadResult[] = [];
+    for (const file of files) {
+      // serial (evita overload)
+      const r = await uploadFile(file, relatedNotificationId);
+      results.push(r);
+    }
+    return results;
   };
 
   return {
     uploadFile,
+    uploadMultipleFiles,
     uploading,
     progress,
   };
