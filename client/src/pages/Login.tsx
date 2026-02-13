@@ -1,131 +1,68 @@
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { KeyRound, User as UserIcon } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useLocation } from "wouter";
-import { toast } from "sonner";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
-function normalizeErrorMessage(err: unknown) {
-  const anyErr = err as any;
-
-  // TRPCClientError costuma ter shape variável
-  const msg =
-    anyErr?.message ||
-    anyErr?.data?.message ||
-    anyErr?.shape?.message ||
-    anyErr?.error?.message ||
-    "";
-
-  if (typeof msg === "string" && msg.trim()) return msg;
-
-  return "Erro ao entrar";
-}
-
-export default function Login() {
-  const { login, loading, userData, isAuthenticated } = useAuth();
+export default function LoginPage() {
+  const { login, isLoading } = useAuth();
   const [, setLocation] = useLocation();
 
-  const [loginId, setLoginId] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
+  const [form, setForm] = useState({
+    loginId: "",
+    password: "",
+  });
 
-  const finalLoginId = useMemo(() => loginId.trim().toLowerCase(), [loginId]);
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setForm({
+      ...form,
+      [e.target.name]: e.target.value,
+    });
+  };
 
-  useEffect(() => {
-    if (!isAuthenticated || !userData) return;
-    if (userData.role === "user") setLocation("/my-notifications");
-    if (userData.role === "admin") setLocation("/dashboard");
-    if (userData.role === "owner") setLocation("/superadmin");
-  }, [isAuthenticated, userData, setLocation]);
-
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-
-    if (!finalLoginId) {
-      toast.error("Informe seu usuário");
-      return;
-    }
-    if (!password.trim()) {
-      toast.error("Informe sua senha");
+  const handleSubmit = async () => {
+    if (!form.loginId || !form.password) {
+      alert("Preencha todos os campos.");
       return;
     }
 
     try {
-      await login({
-        loginId: finalLoginId,
-        password,
-        name: name.trim() || undefined,
-      });
-      toast.success("Login realizado");
-    } catch (err) {
-      toast.error(normalizeErrorMessage(err));
-      setPassword(""); // limpa senha após erro
+      await login(form.loginId, form.password);
+      setLocation("/dashboard");
+    } catch (err: any) {
+      alert(err?.message || "Erro ao fazer login.");
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-background">
-      <div className="w-full max-w-md border border-border rounded-2xl p-6 sm:p-8 bg-card shadow-sm">
-        <div className="mb-6">
-          <h1 className="text-2xl font-semibold">Entrar</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Use seu usuário e senha (podem conter letras, números e &apos;;&apos;).
-            Nome é opcional.
-          </p>
-        </div>
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="w-full max-w-md bg-white rounded-xl shadow p-6 space-y-4">
+        <h1 className="text-xl font-bold text-center">
+          Login
+        </h1>
 
-        <form onSubmit={onSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="loginId" className="flex items-center gap-2">
-              <UserIcon className="w-4 h-4" /> Usuário ou e-mail
-            </Label>
-            <Input
-              id="loginId"
-              type="text"
-              placeholder="Digite seu usuário ou e-mail"
-              value={loginId}
-              onChange={(e) => setLoginId(e.target.value)}
-              autoComplete="username"
-              disabled={loading}
-            />
-          </div>
+        <Input
+          name="loginId"
+          placeholder="Usuário ou email"
+          value={form.loginId}
+          onChange={handleChange}
+        />
 
-          <div className="space-y-2">
-            <Label htmlFor="password" className="flex items-center gap-2">
-              <KeyRound className="w-4 h-4" /> Senha
-            </Label>
-            <Input
-              id="password"
-              type="password"
-              placeholder="••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              disabled={loading}
-            />
-          </div>
+        <Input
+          name="password"
+          type="password"
+          placeholder="Senha"
+          value={form.password}
+          onChange={handleChange}
+        />
 
-          <div className="space-y-2">
-            <Label htmlFor="name" className="flex items-center gap-2">
-              <UserIcon className="w-4 h-4" /> Nome (opcional)
-            </Label>
-            <Input
-              id="name"
-              type="text"
-              placeholder="Seu nome"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoComplete="name"
-              disabled={loading}
-            />
-          </div>
-
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? "Entrando..." : "Entrar"}
-          </Button>
-        </form>
+        <Button
+          className="w-full"
+          onClick={handleSubmit}
+          disabled={isLoading}
+        >
+          {isLoading ? "Entrando..." : "Entrar"}
+        </Button>
       </div>
     </div>
   );
