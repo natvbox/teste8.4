@@ -1,3 +1,4 @@
+// client/src/hooks/useFileUpload.ts
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
 import { toast } from "sonner";
@@ -10,16 +11,9 @@ export interface UploadProgress {
 
 export interface UploadResult {
   success: boolean;
-  fileId?: number;
+  fileId?: number | bigint;
   publicUrl?: string;
   error?: string;
-}
-
-// remove "data:mime;base64," se vier DataURL
-function stripDataUrlPrefix(dataUrl: string) {
-  const idx = dataUrl.indexOf("base64,");
-  if (idx >= 0) return dataUrl.slice(idx + "base64,".length);
-  return dataUrl;
 }
 
 export function useFileUpload() {
@@ -32,23 +26,25 @@ export function useFileUpload() {
 
   const uploadMutation = trpc.upload.upload.useMutation();
 
-  const fileToDataUrl = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
-      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onload = () => resolve(reader.result as string);
       reader.onerror = (error) => reject(error);
     });
+  };
 
+  // ✅ ADICIONADO: tenantId?: number (necessário pro owner)
   const uploadFile = async (
     file: File,
-    relatedNotificationId?: number
+    relatedNotificationId?: number,
+    tenantId?: number
   ): Promise<UploadResult> => {
     try {
       setUploading(true);
-      setProgress({ loaded: 0, total: file.size, percentage: 5 });
+      setProgress({ loaded: 0, total: file.size, percentage: 10 });
 
-      // ✅ Mantém só imagem/vídeo (coerente com FileUploader)
       const allowedTypes = [
         "image/jpeg",
         "image/png",
@@ -60,69 +56,68 @@ export function useFileUpload() {
       ];
 
       if (!allowedTypes.includes(file.type)) {
-        const msg = "Tipo de arquivo não permitido";
-        toast.error(msg);
-        return { success: false, error: msg };
+        toast.error("Tipo de arquivo não permitido");
+        setUploading(false);
+        return { success: false, error: "Tipo de arquivo não permitido" };
       }
 
-      const maxSize = 100 * 1024 * 1024; // 100MB
+      const maxSize = 100 * 1024 * 1024;
       if (file.size > maxSize) {
-        const msg = "Arquivo muito grande (máximo 100MB)";
-        toast.error(msg);
-        return { success: false, error: msg };
+        toast.error("Arquivo muito grande (máximo 100MB)");
+        setUploading(false);
+        return { success: false, error: "Arquivo muito grande" };
       }
 
-      setProgress((p) => ({ ...p, percentage: 15 }));
+      setProgress((prev) => ({ ...prev, percentage: 30 }));
 
-      // ⚠️ ainda é base64 via tRPC (vamos migrar depois para multipart/presigned)
-      const dataUrl = await fileToDataUrl(file);
-      const base64 = stripDataUrlPrefix(dataUrl);
+      const base64Data = await fileToBase64(file);
 
-      setProgress((p) => ({ ...p, percentage: 55 }));
+      setProgress((prev) => ({ ...prev, percentage: 60 }));
 
       const result = await uploadMutation.mutateAsync({
         filename: file.name,
-        fileData: base64, // ✅ manda base64 puro (menos payload)
+        fileData: base64Data,
         mimeType: file.type,
         relatedNotificationId,
+
+        // ✅ NOVO: manda tenantId quando existir (owner)
+        tenantId,
       });
 
-      if (result?.success) {
-        setProgress({ loaded: file.size, total: file.size, percentage: 100 });
+      if (result.success) {
         toast.success("Arquivo enviado com sucesso");
-
+        setProgress({ loaded: file.size, total: file.size, percentage: 100 });
+        setUploading(false);
         return {
           success: true,
-          fileId: result.fileId ? Number(result.fileId) : undefined,
+          fileId:
+            typeof result.fileId === "bigint" ? Number(result.fileId) : result.fileId,
           publicUrl: result.url,
         };
+      } else {
+        throw new Error("Erro no upload");
       }
-
-      // se o backend retornar {success:false, error:"..."}
-      const backendMsg =
-        (result as any)?.error || "Erro no upload";
-
-      toast.error(backendMsg);
-      return { success: false, error: backendMsg };
     } catch (error) {
       console.error("Erro no upload:", error);
-      const msg = error instanceof Error ? error.message : "Erro ao enviar arquivo";
-      toast.error(msg);
-      return { success: false, error: msg };
-    } finally {
+
+      const errorMessage =
+        error instanceof Error ? error.message : "Erro ao enviar arquivo";
+      toast.error(errorMessage);
+
       setUploading(false);
+      return { success: false, error: errorMessage };
     }
   };
 
   const uploadMultipleFiles = async (
     files: File[],
-    relatedNotificationId?: number
+    relatedNotificationId?: number,
+    tenantId?: number
   ): Promise<UploadResult[]> => {
     const results: UploadResult[] = [];
     for (const file of files) {
-      // serial (evita overload)
-      const r = await uploadFile(file, relatedNotificationId);
-      results.push(r);
+      const result = await uploadFile(file, relatedNotificationId, tenantId);
+      results.push(result);
     }
     return results;
   };
