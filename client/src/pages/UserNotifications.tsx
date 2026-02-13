@@ -9,29 +9,75 @@ const FEEDBACK_LABEL: Record<string, string> = {
   disliked: "Não gostei",
 };
 
+function isVideo(url?: string) {
+  if (!url) return false;
+  const u = url.toLowerCase();
+  return u.includes(".mp4") || u.includes(".webm") || u.includes(".ogg");
+}
+
 export default function UserNotifications() {
   const { logout } = useAuth();
   const [, setLocation] = useLocation();
 
-  const inbox = trpc.notifications.inboxList.useQuery({ limit: 50, offset: 0 });
-  const unread = trpc.notifications.getUnreadCount.useQuery();
-  const markAsRead = trpc.notifications.markAsRead.useMutation();
-  const setFeedback = trpc.notifications.setFeedback.useMutation();
+  const utils = trpc.useUtils();
 
-  if (inbox.isLoading) return <div className="p-4">Carregando…</div>;
-  if (inbox.error) return <div className="p-4">Erro ao carregar inbox.</div>;
+  // =========================
+  // Queries
+  // =========================
+  const inbox = trpc.notifications.inboxList.useQuery(
+    { limit: 50, offset: 0 },
+    { refetchOnWindowFocus: false }
+  );
 
+  // ✅ backend correto usa inboxCount
+  const unread = trpc.notifications.inboxCount.useQuery(undefined, {
+    refetchOnWindowFocus: false,
+  });
+
+  // =========================
+  // Mutations
+  // =========================
+  const markAsRead = trpc.notifications.markAsRead.useMutation({
+    onSuccess: async () => {
+      await utils.notifications.inboxList.invalidate();
+      await utils.notifications.inboxCount.invalidate();
+    },
+  });
+
+  const setFeedback = trpc.notifications.setFeedback.useMutation({
+    onSuccess: async () => {
+      await utils.notifications.inboxList.invalidate();
+    },
+  });
+
+  // =========================
+  // Loading / Error
+  // =========================
+  if (inbox.isLoading) {
+    return <div className="p-4">Carregando…</div>;
+  }
+
+  if (inbox.error) {
+    return <div className="p-4">Erro ao carregar inbox.</div>;
+  }
+
+  const items = inbox.data?.data ?? [];
+
+  // =========================
+  // UI
+  // =========================
   return (
-    <div className="p-4 max-w-3xl mx-auto">
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+    <div className="p-4 sm:p-8 max-w-3xl mx-auto">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div>
-          <h2 className="m-0 text-xl font-bold">Minhas mensagens</h2>
-          <div className="text-sm opacity-80">
+          <h2 className="m-0 text-xl sm:text-2xl font-bold">Minhas mensagens</h2>
+          <div className="text-sm text-muted-foreground">
             Não lidas: <b>{unread.data?.count ?? 0}</b>
           </div>
         </div>
+
         <button
-          className="px-3 py-2 rounded border border-white/20 hover:bg-white/5"
+          className="px-3 py-2 rounded-lg border border-border hover:bg-muted transition"
           onClick={async () => {
             await logout();
             setLocation("/login");
@@ -41,62 +87,79 @@ export default function UserNotifications() {
         </button>
       </div>
 
-      <div className="mt-3 grid gap-3">
-        {(inbox.data?.data ?? []).map((m) => (
+      <div className="grid gap-4">
+        {items.map((m) => (
           <div
             key={m.deliveryId}
-            className="border border-white/15 rounded-xl p-3"
+            className="rounded-2xl border border-border bg-card p-4 shadow-sm"
           >
-            <div className="flex items-start justify-between gap-3">
+            {/* Header */}
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="font-bold truncate">{m.title}</div>
-                <div className="opacity-70 text-xs">
+                <div className="font-semibold truncate">{m.title}</div>
+                <div className="text-xs text-muted-foreground">
                   {new Date(m.createdAt).toLocaleString()}
                 </div>
               </div>
 
               {!m.isRead ? (
                 <button
-                  className="text-xs border border-white/20 rounded-md px-2 py-1 hover:bg-white/10"
-                  onClick={async () => {
-                    await markAsRead.mutateAsync({ deliveryId: m.deliveryId });
-                    await inbox.refetch();
-                    await unread.refetch();
-                  }}
+                  className="text-xs border border-border rounded-md px-2 py-1 hover:bg-muted"
+                  onClick={() =>
+                    markAsRead.mutate({ deliveryId: m.deliveryId })
+                  }
                 >
                   Marcar como lida
                 </button>
               ) : (
-                <span className="opacity-70 text-xs">Lida</span>
+                <span className="text-xs text-muted-foreground">Lida</span>
               )}
             </div>
 
-            <div className="mt-2 whitespace-pre-wrap">{m.content}</div>
+            {/* Conteúdo */}
+            <div className="mt-2 whitespace-pre-wrap text-sm">{m.content}</div>
 
+            {/* Anexo */}
             {m.imageUrl ? (
-              <img
-                src={m.imageUrl}
-                alt="imagem"
-                className="mt-3 w-full rounded-lg max-h-[420px] object-cover"
-              />
+              <div className="mt-3">
+                {isVideo(m.imageUrl) ? (
+                  <video
+                    src={m.imageUrl}
+                    controls
+                    className="w-full rounded-xl border border-border max-h-[420px]"
+                  />
+                ) : (
+                  <img
+                    src={m.imageUrl}
+                    alt="imagem"
+                    className="w-full rounded-xl border border-border max-h-[420px] object-cover"
+                  />
+                )}
+              </div>
             ) : null}
 
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <span className="text-xs opacity-80">
-                Reação atual: <b>{m.feedback ? FEEDBACK_LABEL[m.feedback] : "—"}</b>
+            {/* Feedback */}
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                Reação:{" "}
+                <b>
+                  {m.feedback ? FEEDBACK_LABEL[m.feedback] : "Nenhuma ainda"}
+                </b>
               </span>
 
               {(["liked", "renew", "disliked"] as const).map((opt) => (
                 <button
                   key={opt}
                   className={
-                    "text-xs rounded-full px-3 py-1 border border-white/20 hover:bg-white/10 " +
-                    (m.feedback === opt ? "opacity-100" : "opacity-80")
+                    "text-xs rounded-full px-3 py-1 border border-border hover:bg-muted transition " +
+                    (m.feedback === opt ? "bg-muted" : "")
                   }
-                  onClick={async () => {
-                    await setFeedback.mutateAsync({ deliveryId: m.deliveryId, feedback: opt });
-                    await inbox.refetch();
-                  }}
+                  onClick={() =>
+                    setFeedback.mutate({
+                      deliveryId: m.deliveryId,
+                      feedback: opt,
+                    })
+                  }
                 >
                   {FEEDBACK_LABEL[opt]}
                 </button>
@@ -105,8 +168,10 @@ export default function UserNotifications() {
           </div>
         ))}
 
-        {!inbox.data?.data?.length ? (
-          <div className="opacity-70">Nenhuma mensagem ainda.</div>
+        {!items.length ? (
+          <div className="text-sm text-muted-foreground text-center py-10">
+            Nenhuma mensagem ainda.
+          </div>
         ) : null}
       </div>
     </div>
