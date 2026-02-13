@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { router, protectedProcedure, ownerProcedure, adminProcedure } from "../_core/trpc";
 import { getDb } from "../db";
-import { tenants, users, deliveries, userGroups } from "../../drizzle/schema";
-import { eq, sql, count, and } from "drizzle-orm";
+import { tenants, users, deliveries, userGroups, groups } from "../../drizzle/schema";
+import { eq, sql, count, and, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { isValidLoginIdOrEmail, isValidPassword, hashPassword } from "../_core/password";
 
@@ -14,6 +14,22 @@ function normalizeSlug(input: string) {
     .replace(/[^a-z0-9-_]/g, "")
     .replace(/-+/g, "-")
     .replace(/^[-_]+|[-_]+$/g, "");
+}
+
+/**
+ * Regra do painel Admin (decisão A):
+ * - Admin gerencia TODOS os usuários do seu tenant (não depende de createdByAdminId)
+ * - Owner não gerencia users por aqui (usa superadmin)
+ */
+function requireTenantAdmin(ctx: any) {
+  if (ctx.user?.role === "owner") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Owner não usa tenantRouter para users (use superadmin)" });
+  }
+  const tenantId = ctx.user?.tenantId;
+  if (!tenantId) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Sem tenant" });
+  }
+  return tenantId as number;
 }
 
 export const tenantRouter = router({
@@ -104,7 +120,6 @@ export const tenantRouter = router({
 
   /**
    * Listar todos os tenants (apenas Owner)
-   * (Você já tem rotas no superadmin, mas manter aqui ok)
    */
   listTenants: ownerProcedure.query(async () => {
     const db = await getDb();
@@ -253,20 +268,20 @@ export const tenantRouter = router({
   }),
 
   /**
-   * Admin pode ver seus usuários (filtrado por tenant)
+   * Admin pode ver usuários do seu tenant (DECISÃO A)
+   * - Owner não lista por aqui
    */
   listMyUsers: adminProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
 
-    // Owner pode ver todos
-    if (ctx.user?.role === "owner") {
-      return await db.select().from(users).orderBy(sql`${users.createdAt} DESC`);
-    }
+    const tenantId = requireTenantAdmin(ctx);
 
-    if (!ctx.user?.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: "Admin sem tenant" });
-
-    return await db.select().from(users).where(eq(users.tenantId, ctx.user.tenantId));
+    return await db
+      .select()
+      .from(users)
+      .where(eq(users.tenantId, tenantId))
+      .orderBy(sql`${users.createdAt} DESC`);
   }),
 
   /**
@@ -305,138 +320,4 @@ export const tenantRouter = router({
         name: z.string().min(1).max(255),
         loginId: z.string().min(3).max(64),
         password: z.string().min(4).max(128),
-        email: z.string().email().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco de dados não disponível" });
-
-      if (ctx.user?.role === "owner") {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Owner não cria user por aqui (use superadmin)" });
-      }
-
-      if (!ctx.user?.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem tenant" });
-
-      const openId = input.loginId.trim().toLowerCase();
-
-      if (!isValidLoginIdOrEmail(openId)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Usuário inválido. Use um login (letras/números e ; . _ -) ou um e-mail válido",
-        });
-      }
-      if (!isValidPassword(input.password)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Senha inválida. Use apenas letras, números e ; . _ -",
-        });
-      }
-
-      const existing = await db.select({ id: users.id }).from(users).where(eq(users.openId, openId)).limit(1);
-      if (existing.length) throw new TRPCError({ code: "CONFLICT", message: "Usuário já existe" });
-
-      const created = await db
-        .insert(users)
-        .values({
-          tenantId: ctx.user.tenantId,
-          createdByAdminId: ctx.user.id,
-          openId,
-          name: input.name,
-          email: input.email ? input.email.trim().toLowerCase() : null,
-          role: "user",
-          loginMethod: "local",
-          passwordHash: hashPassword(input.password),
-          createdAt: new Date(),
-          updatedAt: new Date(),
-          lastSignedIn: new Date(),
-        })
-        .returning();
-
-      return { success: true, user: created[0] };
-    }),
-
-  /**
-   * ADMIN: atualizar usuário do seu tenant (somente os criados por você)
-   */
-  updateUser: adminProcedure
-    .input(
-      z.object({
-        id: z.number(),
-        name: z.string().min(1).max(255).optional(),
-        email: z.string().email().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco de dados não disponível" });
-
-      if (ctx.user?.role === "owner") {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Owner não atualiza user por aqui (use superadmin)" });
-      }
-
-      if (!ctx.user?.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem tenant" });
-
-      const found = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(
-          and(
-            eq(users.id, input.id),
-            eq(users.tenantId, ctx.user.tenantId),
-            eq(users.role, "user"),
-            eq(users.createdByAdminId, ctx.user.id)
-          )
-        )
-        .limit(1);
-
-      if (!found.length) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado" });
-
-      const patch: any = { updatedAt: new Date() };
-      if (input.name !== undefined) patch.name = input.name;
-
-      if (input.email !== undefined) {
-        patch.email = input.email.trim().toLowerCase();
-      }
-
-      const updated = await db.update(users).set(patch).where(eq(users.id, input.id)).returning();
-      return { success: true, user: updated[0] };
-    }),
-
-  /**
-   * ADMIN: remover usuário comum do seu tenant (somente os criados por você)
-   */
-  deleteUser: adminProcedure
-    .input(z.object({ id: z.number() }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco de dados não disponível" });
-
-      if (ctx.user?.role === "owner") {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Owner não remove user por aqui (use superadmin)" });
-      }
-
-      if (!ctx.user?.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem tenant" });
-
-      const found = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(
-          and(
-            eq(users.id, input.id),
-            eq(users.tenantId, ctx.user.tenantId),
-            eq(users.role, "user"),
-            eq(users.createdByAdminId, ctx.user.id)
-          )
-        )
-        .limit(1);
-
-      if (!found.length) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado" });
-
-      await db.delete(userGroups).where(eq(userGroups.userId, input.id));
-      await db.delete(deliveries).where(eq(deliveries.userId, input.id));
-      await db.delete(users).where(eq(users.id, input.id));
-
-      return { success: true };
-    }),
-});
+        email: z.string().
