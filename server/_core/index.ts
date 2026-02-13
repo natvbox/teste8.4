@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import cors from "cors";
@@ -9,10 +10,11 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
+import { setupVite } from "./vite";
 import { ENV } from "./env";
 
 /* ============================
-   FIX PARA __dirname EM ESM
+   FIX para __dirname em ESM
 ============================ */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,71 +23,52 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  // ✅ Necessário para cookies funcionarem atrás do proxy (Render)
+  // 🔐 necessário para cookies em proxy (Render)
   app.set("trust proxy", 1);
 
-  // ✅ Em produção, não deixa subir sem segredos
-  if (ENV.isProduction) {
-    if (!ENV.cookieSecret) {
-      console.error("[ENV] ❌ COOKIE_SECRET não definido em produção. Abortando.");
-      process.exit(1);
-    }
-    if (!ENV.jwtSecret) {
-      console.error("[ENV] ❌ JWT_SECRET não definido em produção. Abortando.");
-      process.exit(1);
-    }
-  }
+  /* ============================
+     CORS (antes de tudo)
+  ============================ */
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        // permite requisições sem origin (Postman, etc)
+        if (!origin) return callback(null, true);
+
+        if (ENV.PUBLIC_URL && origin === ENV.PUBLIC_URL) {
+          return callback(null, true);
+        }
+
+        if (!ENV.IS_PRODUCTION) {
+          return callback(null, true);
+        }
+
+        return callback(new Error("CORS bloqueado"));
+      },
+      credentials: true,
+    })
+  );
 
   /* ============================
-     Middlewares essenciais
+     Middlewares
   ============================ */
-  app.use(express.json({ limit: "2mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+  app.use(cookieParser());
 
-  // ✅ Cookie parser com o mesmo segredo do sdk/jwt (fonte única)
-  app.use(cookieParser(ENV.cookieSecret || "dev-cookie-secret"));
+  // ⚠️ CRÍTICO para o seu erro anterior:
+  // garante parsing do body JSON antes do tRPC
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: true }));
 
   /* ============================
-     CORS (APENAS PARA API)
+     OAuth (opcional)
   ============================ */
-
-  // ✅ Lista de origins permitidas
-  const allowedOrigins = new Set<string>();
-
-  // Dev
-  allowedOrigins.add("http://localhost:5173");
-  allowedOrigins.add("http://localhost:3000");
-  allowedOrigins.add("http://127.0.0.1:5173");
-  allowedOrigins.add("http://127.0.0.1:3000");
-
-  // Produção / domínio configurado (se existir)
-  if (ENV.appUrl) allowedOrigins.add(ENV.appUrl);
-
-  const corsOptions: cors.CorsOptions = {
-    origin: (origin, callback) => {
-      // Sem origin (curl, healthchecks) -> OK
-      if (!origin) return callback(null, true);
-
-      // Permite qualquer onrender.com (preview / ambientes)
-      if (origin.includes(".onrender.com")) return callback(null, true);
-
-      // Permite origins explicitamente listadas
-      if (allowedOrigins.has(origin)) return callback(null, true);
-
-      return callback(new Error(`Not allowed by CORS: ${origin}`));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-trpc-batch", "x-trpc-source"],
-  };
+  registerOAuthRoutes(app);
 
   /* ============================
-     tRPC (com CORS só aqui)
+     tRPC
   ============================ */
-  app.options("/api/trpc", cors(corsOptions)); // ✅ preflight explícito
   app.use(
     "/api/trpc",
-    cors(corsOptions),
     createExpressMiddleware({
       router: appRouter,
       createContext,
@@ -93,51 +76,31 @@ async function startServer() {
   );
 
   /* ============================
-     OAuth (opcional)
+     Frontend (Vite dev ou build)
   ============================ */
-  if (ENV.oAuthServerUrl) {
-    app.use("/oauth", cors(corsOptions));
-    registerOAuthRoutes(app);
+  const publicDir = path.resolve(__dirname, "../../dist/public");
+
+  if (!ENV.IS_PRODUCTION) {
+    await setupVite(app, server);
   } else {
-    // não registra rota se não tiver OAuth configurado
-    // (evita ruído e chamadas para localhost)
+    app.use(express.static(publicDir));
+
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(publicDir, "index.html"));
+    });
   }
 
   /* ============================
-     FRONTEND ESTÁTICO (dist/public)
+     Start
   ============================ */
-  const publicPath = path.join(__dirname, "public");
+  const port = process.env.PORT || 10000;
 
-  // ✅ Arquivos estáticos SEM CORS
-  app.use(express.static(publicPath));
-
-  // ✅ SPA fallback (somente para rotas do frontend)
-  app.use((req, res, next) => {
-    if (req.method !== "GET") return next();
-    if (req.path.startsWith("/api")) return next();
-    if (req.path.startsWith("/oauth")) return next();
-    if (req.path.includes(".")) return next(); // .js .css .png etc
-
-    return res.sendFile(path.join(publicPath, "index.html"));
-  });
-
-  console.log("🚀 Frontend estático habilitado");
-  console.log("📁 Caminho do frontend:", publicPath);
-
-  /* ============================
-     START SERVER
-  ============================ */
-  const PORT = ENV.port;
-
-  server.listen(PORT, ENV.host, () => {
+  server.listen(port, () => {
     console.log("========================================");
     console.log("✅ Servidor rodando");
-    console.log("🌐 Porta:", PORT);
+    console.log("🌐 Porta:", port);
     console.log("========================================");
   });
 }
 
-startServer().catch((err) => {
-  console.error("❌ Erro ao iniciar servidor:", err);
-  process.exit(1);
-});
+startServer();
