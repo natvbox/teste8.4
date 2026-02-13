@@ -27,208 +27,212 @@ export const tenants = pgTable("tenants", {
   id: serial("id").primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
   slug: varchar("slug", { length: 100 }).notNull().unique(),
+  ownerId: integer("ownerId"),
 
-  status: statusEnum("status").default("active").notNull(),
-  plan: planEnum("plan").default("basic").notNull(),
+  // ✅ enum precisa do nome da coluna
+  status: statusEnum("status").notNull().default("active"),
+  plan: planEnum("plan").notNull().default("basic"),
 
+  subscriptionExpiresAt: timestamp("subscriptionExpiresAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 
+export type Tenant = typeof tenants.$inferSelect;
+export type InsertTenant = typeof tenants.$inferInsert;
+
 /**
- * Usuários do sistema (Admin Panel + Usuários finais)
- * - role: user/admin/owner
- * - tenantId: null para owner (superadmin global)
+ * Users
+ * - Owner: role=owner, tenantId=null
+ * - Admin: role=admin, tenantId=..., createdByAdminId=null
+ * - User comum: role=user, tenantId=..., createdByAdminId=<admin.id>
  */
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
 
-  tenantId: integer("tenantId").references(() => tenants.id),
+  tenantId: integer("tenantId"),
 
-  // loginId: usado para login local (pode ser email ou username)
-  loginId: varchar("loginId", { length: 255 }).notNull().unique(),
+  // isolamento por admin (usuários comuns criados por um admin)
+  createdByAdminId: integer("createdByAdminId"),
 
-  // para exibir no painel
-  name: varchar("name", { length: 255 }),
+  openId: varchar("openId", { length: 64 }).notNull().unique(),
+  name: text("name"),
+  email: varchar("email", { length: 320 }),
+  loginMethod: varchar("loginMethod", { length: 64 }),
 
-  // opcional (pode ser igual ao loginId se for email)
-  email: varchar("email", { length: 255 }),
-
-  // hash de senha (somente para auth local)
+  // Login local com senha (hash).
   passwordHash: text("passwordHash"),
 
-  role: roleEnum("role").default("user").notNull(),
+  // ✅ enum precisa do nome da coluna
+  role: roleEnum("role").notNull().default("user"),
 
-  // controle de criação por admin
-  createdByAdminId: integer("createdByAdminId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
+export type User = typeof users.$inferSelect;
+export type InsertUser = typeof users.$inferInsert;
+
 /**
- * Grupos (criados por Admin dentro do tenant)
+ * Grupos (isolados por Tenant e por Admin criador)
  */
 export const groups = pgTable("groups", {
   id: serial("id").primaryKey(),
-  tenantId: integer("tenantId")
-    .references(() => tenants.id)
-    .notNull(),
+  tenantId: integer("tenantId").notNull(),
+
+  // isolamento por admin
+  createdByAdminId: integer("createdByAdminId").notNull(),
 
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
-
-  createdByAdminId: integer("createdByAdminId").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 
+export type Group = typeof groups.$inferSelect;
+export type InsertGroup = typeof groups.$inferInsert;
+
 /**
- * Relação Usuários x Grupos (many-to-many)
+ * Relação user <-> group
  */
 export const userGroups = pgTable("user_groups", {
   id: serial("id").primaryKey(),
-
-  tenantId: integer("tenantId")
-    .references(() => tenants.id)
-    .notNull(),
-
-  userId: integer("userId")
-    .references(() => users.id)
-    .notNull(),
-
-  groupId: integer("groupId")
-    .references(() => groups.id)
-    .notNull(),
-
+  userId: integer("userId").notNull(),
+  groupId: integer("groupId").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
 /**
- * Notificações/Mensagens (criadas por Admin ou Owner)
- * - targetType: all/users/groups (owner também usa)
- * - targetIds: array JSON com ids (userIds ou groupIds)
+ * Notificações/Mensagens (isoladas por tenant e criadas por admin/owner)
  */
 export const notifications = pgTable("notifications", {
   id: serial("id").primaryKey(),
-
-  tenantId: integer("tenantId")
-    .references(() => tenants.id)
-    .notNull(),
-
+  tenantId: integer("tenantId").notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   content: text("content").notNull(),
 
-  // (hoje só tem imagem; vídeo está coberto pelo módulo files/upload)
-  imageUrl: text("imageUrl"),
+  // ✅ enum com nome de coluna
+  priority: priorityEnum("priority").notNull().default("normal"),
 
-  priority: priorityEnum("priority").default("normal").notNull(),
+  // id do criador (admin/owner)
+  createdBy: integer("createdBy").notNull(),
 
-  // quem criou (admin ou owner)
-  createdBy: integer("createdBy").references(() => users.id),
-
-  targetType: targetTypeEnum("targetType").default("all").notNull(),
-
-  // ids (users ou groups) em JSON
-  targetIds: json("targetIds").default([]).notNull(),
-
-  // agenda
-  isScheduled: boolean("isScheduled").default(false).notNull(),
-  scheduledAt: timestamp("scheduledAt"),
-
-  // controle
-  isActive: boolean("isActive").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
+
+  // ✅ enum com nome de coluna
+  targetType: targetTypeEnum("targetType").notNull().default("all"),
+
+  // ✅ manter sempre array (evita null)
+  targetIds: json("targetIds").$type<number[]>().default([]),
+
+  imageUrl: varchar("imageUrl", { length: 500 }),
+
+  isScheduled: boolean("isScheduled").notNull().default(false),
+  scheduledFor: timestamp("scheduledFor"),
+
+  // ✅ enum com nome de coluna
+  recurrence: recurrenceEnum("recurrence").notNull().default("none"),
+
+  isActive: boolean("isActive").notNull().default(true),
 });
 
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = typeof notifications.$inferInsert;
+
 /**
- * Agendamentos (Scheduler) - opcional
- * (se você usar a tabela schedules para disparos recorrentes ou atrasados)
+ * Agendamentos
  */
 export const schedules = pgTable("schedules", {
   id: serial("id").primaryKey(),
+  tenantId: integer("tenantId").notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  content: text("content").notNull(),
 
-  tenantId: integer("tenantId")
-    .references(() => tenants.id)
-    .notNull(),
+  // ✅ enum com nome de coluna
+  priority: priorityEnum("priority").notNull().default("normal"),
 
-  notificationId: integer("notificationId")
-    .references(() => notifications.id)
-    .notNull(),
-
-  recurrence: recurrenceEnum("recurrence").default("none").notNull(),
-  runAt: timestamp("runAt"),
-
-  isActive: boolean("isActive").default(true).notNull(),
+  createdBy: integer("createdBy").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
+
+  // ✅ enum com nome de coluna
+  targetType: targetTypeEnum("targetType").notNull().default("all"),
+  targetIds: json("targetIds").$type<number[]>().default([]),
+  imageUrl: varchar("imageUrl", { length: 500 }),
+
+  scheduledFor: timestamp("scheduledFor").notNull(),
+
+  // ✅ enum com nome de coluna
+  recurrence: recurrenceEnum("recurrence").notNull().default("none"),
+
+  isActive: boolean("isActive").notNull().default(true),
+  lastExecutedAt: timestamp("lastExecutedAt"),
 });
 
+export type Schedule = typeof schedules.$inferSelect;
+export type InsertSchedule = typeof schedules.$inferInsert;
+
 /**
- * Entregas (Inbox) - cada usuário recebe uma "delivery" por notificação
+ * Entregas (inbox do usuário)
  */
 export const deliveries = pgTable("deliveries", {
   id: serial("id").primaryKey(),
+  tenantId: integer("tenantId").notNull(),
+  notificationId: integer("notificationId").notNull(),
+  userId: integer("userId").notNull(),
 
-  tenantId: integer("tenantId")
-    .references(() => tenants.id)
-    .notNull(),
+  // ✅ enum com nome de coluna (tipo chama deliveryStatusEnum, coluna chama "status")
+  status: deliveryStatusEnum("status").notNull().default("sent"),
 
-  notificationId: integer("notificationId")
-    .references(() => notifications.id)
-    .notNull(),
-
-  userId: integer("userId")
-    .references(() => users.id)
-    .notNull(),
-
-  status: deliveryStatusEnum("status").default("sent").notNull(),
-
-  // inbox
-  isRead: boolean("isRead").default(false).notNull(),
+  deliveredAt: timestamp("deliveredAt"),
   readAt: timestamp("readAt"),
 
+  isRead: boolean("isRead").notNull().default(false),
+
+  errorMessage: text("errorMessage"),
+
+  // ✅ feedback do usuário
   feedback: feedbackEnum("feedback"),
   feedbackAt: timestamp("feedbackAt"),
-
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
+export type Delivery = typeof deliveries.$inferSelect;
+export type InsertDelivery = typeof deliveries.$inferInsert;
+
 /**
- * Uploads (mídia)
+ * Arquivos (isolados por tenant)
  */
 export const files = pgTable("files", {
   id: serial("id").primaryKey(),
-
-  tenantId: integer("tenantId")
-    .references(() => tenants.id)
-    .notNull(),
-
+  tenantId: integer("tenantId").notNull(),
   filename: varchar("filename", { length: 255 }).notNull(),
-  fileKey: text("fileKey").notNull(),
-  url: text("url").notNull(),
-
-  mimeType: varchar("mimeType", { length: 120 }).notNull(),
-  fileSize: integer("fileSize").notNull(),
-
-  uploadedBy: integer("uploadedBy")
-    .references(() => users.id)
-    .notNull(),
-
+  fileKey: varchar("fileKey", { length: 500 }).notNull(),
+  url: varchar("url", { length: 500 }).notNull(),
+  mimeType: varchar("mimeType", { length: 100 }),
+  fileSize: integer("fileSize"),
+  uploadedBy: integer("uploadedBy").notNull(),
   uploadedAt: timestamp("uploadedAt").defaultNow().notNull(),
-
-  relatedNotificationId: integer("relatedNotificationId").references(() => notifications.id),
-
-  isPublic: boolean("isPublic").default(true).notNull(),
+  relatedNotificationId: integer("relatedNotificationId"),
+  isPublic: boolean("isPublic").notNull().default(false),
 });
 
+export type File = typeof files.$inferSelect;
+export type InsertFile = typeof files.$inferInsert;
+
 /**
- * Logs (eventos do sistema)
+ * Logs (isolados por tenant e opcionalmente por admin)
  */
 export const logs = pgTable("logs", {
   id: serial("id").primaryKey(),
+  tenantId: integer("tenantId"),
 
-  tenantId: integer("tenantId").references(() => tenants.id),
-  userId: integer("userId").references(() => users.id),
+  // opcional para auditoria por admin
+  createdByAdminId: integer("createdByAdminId"),
 
-  level: varchar("level", { length: 20 }).default("info").notNull(),
-  message: text("message").notNull(),
-  meta: json("meta").default({}).notNull(),
-
+  userId: integer("userId"),
+  action: varchar("action", { length: 255 }).notNull(),
+  entityType: varchar("entityType", { length: 100 }),
+  entityId: integer("entityId"),
+  details: text("details"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
