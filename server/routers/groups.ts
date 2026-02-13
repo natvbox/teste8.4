@@ -15,11 +15,6 @@ export const groupsRouter = router({
   list: adminOnlyProcedure
     .input(z.object({ limit: z.number().min(1).max(200).default(100) }).optional())
     .query(async ({ ctx, input }) => {
-      // owner não tem tenant (por regra não usa este endpoint)
-      if (ctx.user.role !== "admin") {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Apenas admin" });
-      }
-
       const db = await getDb();
       if (!db) return { data: [], total: 0 };
 
@@ -49,8 +44,6 @@ export const groupsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Apenas admin" });
-
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
 
@@ -81,8 +74,6 @@ export const groupsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Apenas admin" });
-
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
 
@@ -108,8 +99,6 @@ export const groupsRouter = router({
   delete: adminOnlyProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
-      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Apenas admin" });
-
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
 
@@ -121,6 +110,7 @@ export const groupsRouter = router({
         .from(groups)
         .where(and(eq(groups.id, input.id), eq(groups.tenantId, tenantId), eq(groups.createdByAdminId, adminId)))
         .limit(1);
+
       if (!found.length) throw new TRPCError({ code: "NOT_FOUND", message: "Grupo não encontrado" });
 
       await db.delete(userGroups).where(eq(userGroups.groupId, input.id));
@@ -132,15 +122,12 @@ export const groupsRouter = router({
   getMembers: adminOnlyProcedure
     .input(z.object({ groupId: z.number() }))
     .query(async ({ ctx, input }) => {
-      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Apenas admin" });
-
       const db = await getDb();
       if (!db) return { userIds: [] as number[] };
 
       const tenantId = requireTenant(ctx);
       const adminId = ctx.user.id;
 
-      // valida grupo
       const found = await db
         .select({ id: groups.id })
         .from(groups)
@@ -154,7 +141,7 @@ export const groupsRouter = router({
         .from(userGroups)
         .where(eq(userGroups.groupId, input.groupId));
 
-      return { userIds: rows.map(r => r.userId) };
+      return { userIds: rows.map((r) => r.userId) };
     }),
 
   setMembers: adminOnlyProcedure
@@ -165,20 +152,18 @@ export const groupsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Apenas admin" });
-
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
 
       const tenantId = requireTenant(ctx);
       const adminId = ctx.user.id;
 
-      // valida grupo
       const found = await db
         .select({ id: groups.id })
         .from(groups)
         .where(and(eq(groups.id, input.groupId), eq(groups.tenantId, tenantId), eq(groups.createdByAdminId, adminId)))
         .limit(1);
+
       if (!found.length) throw new TRPCError({ code: "NOT_FOUND", message: "Grupo não encontrado" });
 
       // valida users (somente role=user criados pelo admin)
@@ -194,18 +179,21 @@ export const groupsRouter = router({
               inArray(users.id, input.memberUserIds)
             )
           );
-        const validIds = new Set(validUsers.map(u => u.id));
-        const bad = input.memberUserIds.filter(id => !validIds.has(id));
+
+        const validIds = new Set(validUsers.map((u) => u.id));
+        const bad = input.memberUserIds.filter((id) => !validIds.has(id));
         if (bad.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Usuários inválidos" });
       }
 
       await db.transaction(async (tx) => {
         await tx.delete(userGroups).where(eq(userGroups.groupId, input.groupId));
+
         if (input.memberUserIds.length) {
           await tx.insert(userGroups).values(
             input.memberUserIds.map((userId) => ({
               groupId: input.groupId,
               userId,
+              createdAt: new Date(),
             }))
           );
         }
