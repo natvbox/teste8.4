@@ -21,10 +21,13 @@ function buildCookie(name: string, value: string, maxAgeSeconds: number) {
   const secure = isProd;
   const sameSite = secure ? "None" : "Lax";
 
+  const expires = new Date(Date.now() + maxAgeSeconds * 1000).toUTCString();
+
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
     `Path=/`,
     `Max-Age=${maxAgeSeconds}`,
+    `Expires=${expires}`,
     `SameSite=${sameSite}`,
     `HttpOnly`,
   ];
@@ -42,6 +45,7 @@ function clearCookie(name: string) {
     `${name}=`,
     `Path=/`,
     `Max-Age=0`,
+    `Expires=Thu, 01 Jan 1970 00:00:00 GMT`,
     `SameSite=${sameSite}`,
     `HttpOnly`,
   ];
@@ -62,7 +66,7 @@ export const authRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       // ✅ fonte única (mesmo que o sdk lê)
-      const cookieName = ENV.sessionCookieName || "app_session_id";
+      const cookieName = (ENV.sessionCookieName || "app_session_id").trim();
 
       const openId = input.loginId.trim().toLowerCase();
 
@@ -127,7 +131,7 @@ export const authRouter = router({
     }),
 
   logout: protectedProcedure.mutation(async ({ ctx }) => {
-    const cookieName = ENV.sessionCookieName || "app_session_id";
+    const cookieName = (ENV.sessionCookieName || "app_session_id").trim();
     ctx.res.setHeader("Set-Cookie", clearCookie(cookieName));
     return { success: true };
   }),
