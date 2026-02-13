@@ -20,23 +20,16 @@ export const queryClient = new QueryClient({
 // ==============================
 
 function getBaseUrl() {
-  // Se definido no .env do frontend
-  if (import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL;
+  if (typeof window !== "undefined") return ""; // browser
+
+  // SSR / node
+  if (process.env.RENDER_INTERNAL_HOSTNAME) {
+    return `http://${process.env.RENDER_INTERNAL_HOSTNAME}:${process.env.PORT ?? 10000}`;
   }
 
-  // Produção (mesmo domínio)
-  if (typeof window !== "undefined") {
-    return window.location.origin;
-  }
-
-  // Fallback SSR
-  return "http://localhost:10000";
+  return `http://localhost:${process.env.PORT ?? 10000}`;
 }
 
-// ==============================
-// tRPC Client
-// ==============================
 export const trpcClient = trpc.createClient({
   transformer: superjson,
   links: [
@@ -45,7 +38,7 @@ export const trpcClient = trpc.createClient({
       fetch(url, options) {
         return fetch(url, {
           ...options,
-          credentials: "include", // 🔴 essencial para cookies
+          credentials: "include",
         });
       },
     }),
