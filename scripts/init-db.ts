@@ -1,118 +1,101 @@
+import "dotenv/config";
+import fs from "fs";
+import path from "path";
+import { Pool } from "pg";
+import bcrypt from "bcryptjs";
+import { ENV } from "../server/_core/env";
+
 /**
- * Script para inicializar o banco de dados PostgreSQL
- * Executa o script SQL (create-tables.sql) e cria/garante o usuário owner.
- *
- * Uso: npx tsx scripts/init-db.ts
+ * Script de inicialização do banco:
+ * - cria tabelas (se necessário)
+ * - roda SQL base
+ * - garante usuário owner
  */
 
-import postgres from "postgres";
-import * as fs from "fs";
-import * as path from "path";
-import * as dotenv from "dotenv";
-import { hashPassword } from "../server/_core/password";
+async function run() {
+  if (!ENV.DATABASE_URL) {
+    console.error("❌ DATABASE_URL não definida");
+    process.exit(1);
+  }
 
-// Carregar variáveis de ambiente
-dotenv.config();
-
-const DATABASE_URL = process.env.DATABASE_URL;
-
-if (!DATABASE_URL) {
-  console.error("❌ DATABASE_URL não está definido no .env");
-  process.exit(1);
-}
-
-async function initDatabase() {
-  console.log("🔄 Conectando ao banco de dados...");
-
-  const sql = postgres(DATABASE_URL!, {
-    ssl: { rejectUnauthorized: false },
-    max: 1,
-    connect_timeout: 30,
+  const pool = new Pool({
+    connectionString: ENV.DATABASE_URL,
+    ssl:
+      ENV.NODE_ENV === "production"
+        ? { rejectUnauthorized: false }
+        : false,
   });
 
   try {
-    // Testar conexão
-    const result = await sql`SELECT NOW() as time`;
-    console.log("✅ Conexão estabelecida:", result[0].time);
+    console.log("[Banco de dados] 🔄 Conectando...");
 
-    // Ler o script SQL
-    const sqlFilePath = path.join(__dirname, "create-tables.sql");
-    const sqlContent = fs.readFileSync(sqlFilePath, "utf-8");
+    const client = await pool.connect();
 
-    console.log("🔄 Executando migrations (create-tables.sql inteiro)...");
+    console.log("[Banco de dados] ✅ Conectado");
 
     /**
-     * ⚠️ IMPORTANTE:
-     * Não podemos quebrar por ";" porque o arquivo tem blocos DO $$ ... $$;
-     * Executar o conteúdo inteiro evita corrupção do script.
+     * 1️⃣ Criar tabelas via SQL (caso exista)
      */
-    await sql.unsafe(sqlContent);
+    const sqlPath = path.resolve(
+      process.cwd(),
+      "scripts",
+      "create-tables.sql"
+    );
 
-    console.log("✅ Migrations executadas com sucesso!");
+    if (fs.existsSync(sqlPath)) {
+      console.log("[Banco de dados] 📄 Executando create-tables.sql...");
 
-    // Verificar tabelas criadas
-    const tables = await sql`
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-      ORDER BY table_name
-    `;
+      const sql = fs.readFileSync(sqlPath, "utf-8");
+      await client.query(sql);
 
-    console.log("\n📋 Tabelas no banco de dados:");
-    tables.forEach((t) => console.log(`  - ${t.table_name}`));
-
-    // Verificar/criar usuário owner (se configurado)
-    const ownerOpenId = process.env.OWNER_OPEN_ID;
-    const ownerPassword = process.env.OWNER_PASSWORD;
-
-    if (ownerOpenId) {
-      const existingOwner = await sql`
-        SELECT id, "openId", role FROM users WHERE "openId" = ${ownerOpenId}
-      `;
-
-      const ownerPasswordHash = ownerPassword ? hashPassword(ownerPassword) : null;
-
-      if (existingOwner.length === 0) {
-        console.log(`\n🔄 Criando usuário owner: ${ownerOpenId}`);
-        await sql`
-          INSERT INTO users ("openId", name, email, role, "loginMethod", "passwordHash")
-          VALUES (${ownerOpenId}, 'Owner', ${ownerOpenId}, 'owner', 'local', ${ownerPasswordHash})
-          ON CONFLICT ("openId") DO UPDATE SET role = 'owner'
-        `;
-        console.log("✅ Usuário owner criado!");
-      } else if (existingOwner[0].role !== "owner") {
-        console.log(`\n🔄 Atualizando usuário para owner: ${ownerOpenId}`);
-        await sql`
-          UPDATE users
-          SET role = 'owner',
-              "passwordHash" = COALESCE("passwordHash", ${ownerPasswordHash})
-          WHERE "openId" = ${ownerOpenId}
-        `;
-        console.log("✅ Usuário atualizado para owner!");
-      } else {
-        console.log(`\n✅ Usuário owner já existe: ${ownerOpenId}`);
-
-        if (ownerPasswordHash) {
-          // define senha apenas se ainda não estiver definida
-          await sql`
-            UPDATE users
-            SET "passwordHash" = COALESCE("passwordHash", ${ownerPasswordHash})
-            WHERE "openId" = ${ownerOpenId}
-          `;
-        }
-      }
+      console.log("[Banco de dados] ✅ Estrutura criada/verificada");
     } else {
-      console.log(
-        "\n⚠️ OWNER_OPEN_ID não definido. Nenhum owner será criado automaticamente."
-      );
+      console.log("[Banco de dados] ⚠️ create-tables.sql não encontrado");
     }
+
+    /**
+     * 2️⃣ Garantir usuário OWNER
+     */
+    if (!ENV.OWNER_OPEN_ID) {
+      console.log("[Banco de dados] ⚠️ OWNER_OPEN_ID não definido");
+    } else {
+      const ownerLogin = ENV.OWNER_OPEN_ID;
+      const ownerPassword =
+        ENV.OWNER_PASSWORD || "admin123";
+
+      const passwordHash = await bcrypt.hash(ownerPassword, 10);
+
+      const check = await client.query(
+        "SELECT id FROM users WHERE loginId = $1 LIMIT 1",
+        [ownerLogin]
+      );
+
+      if (check.rows.length === 0) {
+        await client.query(
+          `
+          INSERT INTO users (loginId, passwordHash, role, "createdAt")
+          VALUES ($1, $2, 'owner', NOW())
+          `,
+          [ownerLogin, passwordHash]
+        );
+
+        console.log(
+          `[Banco de dados] ✅ OWNER criado: ${ownerLogin}`
+        );
+      } else {
+        console.log(
+          `[Banco de dados] ✅ OWNER já existe: ${ownerLogin}`
+        );
+      }
+    }
+
+    client.release();
   } catch (error) {
-    console.error("❌ Erro ao executar migrations:", error);
+    console.error("[Banco de dados] ❌ Erro:", error);
     process.exit(1);
   } finally {
-    await sql.end();
-    console.log("\n✅ Inicialização concluída!");
+    await pool.end();
   }
 }
 
-initDatabase();
+run();
