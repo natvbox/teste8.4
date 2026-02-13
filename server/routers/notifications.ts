@@ -1,8 +1,20 @@
 import { z } from "zod";
-import { router, adminOnlyProcedure, ownerOnlyProcedure, protectedProcedure } from "../_core/trpc";
+import {
+  router,
+  adminOnlyProcedure,
+  ownerOnlyProcedure,
+  protectedProcedure,
+} from "../_core/trpc";
 import { getDb } from "../db";
-import { notifications, deliveries, users, groups, userGroups, tenants } from "../../drizzle/schema";
-import { and, eq, desc, inArray, sql } from "drizzle-orm";
+import {
+  notifications,
+  deliveries,
+  users,
+  groups,
+  userGroups,
+  tenants,
+} from "../../drizzle/schema";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
 function requireTenant(ctx: any): number {
@@ -13,7 +25,11 @@ function requireTenant(ctx: any): number {
 
 async function requireDb() {
   const db = await getDb();
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
+  if (!db)
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "DB indisponível",
+    });
   return db;
 }
 
@@ -32,32 +48,42 @@ export const notificationsRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
-      if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Não autenticado" });
-      if (ctx.user.role === "user") throw new TRPCError({ code: "FORBIDDEN", message: "Apenas admin/owner" });
+      if (!ctx.user)
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Não autenticado" });
+      if (ctx.user.role === "user")
+        throw new TRPCError({ code: "FORBIDDEN", message: "Apenas admin/owner" });
 
       const db = await requireDb();
 
       const effectiveTenantId =
-        ctx.user.role === "owner" ? (input.tenantId ?? null) : (ctx.user.tenantId ?? null);
+        ctx.user.role === "owner"
+          ? input.tenantId ?? null
+          : ctx.user.tenantId ?? null;
 
       if (ctx.user.role !== "owner" && !effectiveTenantId) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Tenant não definido" });
       }
 
-      const whereClause = effectiveTenantId ? eq(notifications.tenantId, effectiveTenantId) : undefined;
+      const base = db.select().from(notifications);
 
-      const data = await db
-        .select()
-        .from(notifications)
-        .where(whereClause)
+      const q = effectiveTenantId
+        ? base.where(eq(notifications.tenantId, effectiveTenantId))
+        : base;
+
+      const data = await q
         .orderBy(sql`${notifications.createdAt} DESC`)
         .limit(input.limit)
         .offset(input.offset);
 
-      const totalRows = await db
+      const totalBase = db
         .select({ count: sql<number>`count(*)` })
-        .from(notifications)
-        .where(whereClause);
+        .from(notifications);
+
+      const totalQ = effectiveTenantId
+        ? totalBase.where(eq(notifications.tenantId, effectiveTenantId))
+        : totalBase;
+
+      const totalRows = await totalQ;
 
       return { data, total: Number(totalRows?.[0]?.count ?? 0) };
     }),
@@ -75,7 +101,6 @@ export const notificationsRouter = router({
         targetType: z.enum(["all", "users", "groups"]),
         targetIds: z.array(z.number()).default([]),
         imageUrl: z.string().optional(),
-        // ❌ removido: videoUrl (não existe no schema)
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -90,12 +115,19 @@ export const notificationsRouter = router({
         const rows = await db
           .select({ id: users.id })
           .from(users)
-          .where(and(eq(users.tenantId, tenantId), eq(users.role, "user"), eq(users.createdByAdminId, adminId)));
+          .where(
+            and(
+              eq(users.tenantId, tenantId),
+              eq(users.role, "user"),
+              eq(users.createdByAdminId, adminId)
+            )
+          );
         userIds = rows.map((r) => r.id);
       }
 
       if (input.targetType === "users") {
-        if (!input.targetIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione usuários" });
+        if (!input.targetIds.length)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione usuários" });
 
         const rows = await db
           .select({ id: users.id })
@@ -110,19 +142,28 @@ export const notificationsRouter = router({
           );
 
         userIds = rows.map((r) => r.id);
-        if (!userIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Usuários inválidos" });
+        if (!userIds.length)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Usuários inválidos" });
       }
 
       if (input.targetType === "groups") {
-        if (!input.targetIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione grupos" });
+        if (!input.targetIds.length)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione grupos" });
 
         const validGroups = await db
           .select({ id: groups.id })
           .from(groups)
-          .where(and(eq(groups.tenantId, tenantId), eq(groups.createdByAdminId, adminId), inArray(groups.id, input.targetIds)));
+          .where(
+            and(
+              eq(groups.tenantId, tenantId),
+              eq(groups.createdByAdminId, adminId),
+              inArray(groups.id, input.targetIds)
+            )
+          );
 
         const groupIds = validGroups.map((g) => g.id);
-        if (!groupIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Grupos inválidos" });
+        if (!groupIds.length)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Grupos inválidos" });
 
         const members = await db
           .select({ userId: userGroups.userId })
@@ -133,7 +174,8 @@ export const notificationsRouter = router({
         for (const m of members) uniq.add(m.userId);
 
         const memberIds = Array.from(uniq);
-        if (!memberIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Grupo sem membros" });
+        if (!memberIds.length)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Grupo sem membros" });
 
         const okMembers = await db
           .select({ id: users.id })
@@ -148,10 +190,15 @@ export const notificationsRouter = router({
           );
 
         userIds = okMembers.map((u) => u.id);
-        if (!userIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Membros inválidos para este admin" });
+        if (!userIds.length)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Membros inválidos para este admin",
+          });
       }
 
-      if (!userIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhum destinatário" });
+      if (!userIds.length)
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhum destinatário" });
 
       const now = new Date();
 
@@ -170,10 +217,17 @@ export const notificationsRouter = router({
             isScheduled: false,
             isActive: true,
             createdAt: now,
-          })
+          } as any)
           .returning({ id: notifications.id });
 
-        const notificationId = inserted[0]?.id!;
+        const notificationId = inserted[0]?.id;
+        if (!notificationId) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Falha ao criar notificação",
+          });
+        }
+
         const rows = userIds.map((uid) => ({
           tenantId,
           notificationId,
@@ -182,7 +236,7 @@ export const notificationsRouter = router({
           isRead: false,
         }));
 
-        await tx.insert(deliveries).values(rows);
+        await tx.insert(deliveries).values(rows as any);
         return { notificationId, deliveries: rows.length };
       });
 
@@ -203,7 +257,6 @@ export const notificationsRouter = router({
         targetIds: z.array(z.number()).default([]),
         tenantId: z.number().optional(), // obrigatório exceto quando targetType=tenants
         imageUrl: z.string().optional(),
-        // ❌ removido: videoUrl (não existe no schema)
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -214,14 +267,20 @@ export const notificationsRouter = router({
         input.targetType === "tenants"
           ? Array.from(new Set(input.targetIds))
           : input.tenantId
-            ? [input.tenantId]
-            : [];
+          ? [input.tenantId]
+          : [];
 
-      if (!tenantIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione tenant" });
+      if (!tenantIds.length)
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione tenant" });
 
-      const validTenants = await db.select({ id: tenants.id }).from(tenants).where(inArray(tenants.id, tenantIds));
+      const validTenants = await db
+        .select({ id: tenants.id })
+        .from(tenants)
+        .where(inArray(tenants.id, tenantIds));
+
       const validTenantIds = validTenants.map((t) => t.id);
-      if (!validTenantIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Tenants inválidos" });
+      if (!validTenantIds.length)
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Tenants inválidos" });
 
       let totalDeliveries = 0;
       const createdNotificationIds: number[] = [];
@@ -231,13 +290,18 @@ export const notificationsRouter = router({
 
         if (input.targetType === "admins") {
           const where = input.targetIds.length
-            ? and(eq(users.tenantId, tenantId), eq(users.role, "admin"), inArray(users.id, input.targetIds))
+            ? and(
+                eq(users.tenantId, tenantId),
+                eq(users.role, "admin"),
+                inArray(users.id, input.targetIds)
+              )
             : and(eq(users.tenantId, tenantId), eq(users.role, "admin"));
 
           const rows = await db.select({ id: users.id }).from(users).where(where);
           userIds = rows.map((r) => r.id);
 
-          if (!userIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhum admin encontrado" });
+          if (!userIds.length)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhum admin encontrado" });
         } else if (input.targetType === "all" || input.targetType === "tenants") {
           const rows = await db
             .select({ id: users.id })
@@ -245,14 +309,20 @@ export const notificationsRouter = router({
             .where(and(eq(users.tenantId, tenantId), eq(users.role, "user")));
           userIds = rows.map((r) => r.id);
         } else if (input.targetType === "users") {
-          if (!input.targetIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione usuários" });
+          if (!input.targetIds.length)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione usuários" });
+
           const rows = await db
             .select({ id: users.id })
             .from(users)
             .where(and(eq(users.tenantId, tenantId), inArray(users.id, input.targetIds)));
+
           userIds = rows.map((r) => r.id);
+          if (!userIds.length)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Usuários inválidos" });
         } else if (input.targetType === "groups") {
-          if (!input.targetIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione grupos" });
+          if (!input.targetIds.length)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione grupos" });
 
           const validGroups = await db
             .select({ id: groups.id })
@@ -260,7 +330,8 @@ export const notificationsRouter = router({
             .where(and(eq(groups.tenantId, tenantId), inArray(groups.id, input.targetIds)));
 
           const groupIds = validGroups.map((g) => g.id);
-          if (!groupIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Grupos inválidos" });
+          if (!groupIds.length)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Grupos inválidos" });
 
           const members = await db
             .select({ userId: userGroups.userId })
@@ -271,27 +342,39 @@ export const notificationsRouter = router({
           for (const m of members) uniq.add(m.userId);
 
           const memberIds = Array.from(uniq);
-          if (!memberIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Grupo sem membros" });
+          if (!memberIds.length)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Grupo sem membros" });
 
           const rows = await db
             .select({ id: users.id })
             .from(users)
-            .where(and(eq(users.tenantId, tenantId), eq(users.role, "user"), inArray(users.id, memberIds)));
+            .where(
+              and(
+                eq(users.tenantId, tenantId),
+                eq(users.role, "user"),
+                inArray(users.id, memberIds)
+              )
+            );
 
           userIds = rows.map((r) => r.id);
+          if (!userIds.length)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhum destinatário" });
         }
 
-        if (!userIds.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhum destinatário" });
+        if (!userIds.length)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Nenhum destinatário" });
 
         const now = new Date();
 
         const result = await db.transaction(async (tx) => {
           const mappedTargetType =
-            input.targetType === "admins" ? "users" : input.targetType === "tenants" ? "all" : (input.targetType as any);
+            input.targetType === "admins"
+              ? "users"
+              : input.targetType === "tenants"
+              ? "all"
+              : (input.targetType as any);
 
-          // ✅ targetIds no banco só fazem sentido para users/groups
-          const mappedTargetIds =
-            input.targetType === "tenants" ? [] : input.targetIds;
+          const mappedTargetIds = input.targetType === "tenants" ? [] : input.targetIds;
 
           const inserted = await tx
             .insert(notifications)
@@ -307,10 +390,17 @@ export const notificationsRouter = router({
               isScheduled: false,
               isActive: true,
               createdAt: now,
-            })
+            } as any)
             .returning({ id: notifications.id });
 
-          const notificationId = inserted[0]?.id!;
+          const notificationId = inserted[0]?.id;
+          if (!notificationId) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Falha ao criar notificação",
+            });
+          }
+
           const rows = userIds.map((uid) => ({
             tenantId,
             notificationId,
@@ -319,7 +409,7 @@ export const notificationsRouter = router({
             isRead: false,
           }));
 
-          await tx.insert(deliveries).values(rows);
+          await tx.insert(deliveries).values(rows as any);
           return { notificationId, deliveries: rows.length };
         });
 
@@ -327,14 +417,23 @@ export const notificationsRouter = router({
         totalDeliveries += result.deliveries;
       }
 
-      return { success: true, notificationIds: createdNotificationIds, deliveries: totalDeliveries };
+      return {
+        success: true,
+        notificationIds: createdNotificationIds,
+        deliveries: totalDeliveries,
+      };
     }),
 
   /**
    * Inbox (mensagens recebidas)
    */
   inboxList: protectedProcedure
-    .input(z.object({ limit: z.number().default(50), offset: z.number().default(0) }))
+    .input(
+      z.object({
+        limit: z.number().min(1).max(200).default(50),
+        offset: z.number().min(0).default(0),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const db = await requireDb();
 
@@ -396,10 +495,20 @@ export const notificationsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Apenas user/admin" });
       }
 
+      const existing = await db
+        .select({ id: deliveries.id })
+        .from(deliveries)
+        .where(and(eq(deliveries.id, input.deliveryId), eq(deliveries.userId, ctx.user.id)))
+        .limit(1);
+
+      if (!existing.length) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entrega não encontrada" });
+      }
+
       await db
         .update(deliveries)
         .set({ isRead: true, readAt: new Date() })
-        .where(and(eq(deliveries.id, input.deliveryId), eq(deliveries.userId, ctx.user.id)));
+        .where(eq(deliveries.id, input.deliveryId));
 
       return { success: true };
     }),
@@ -419,7 +528,9 @@ export const notificationsRouter = router({
         .where(and(eq(deliveries.id, input.deliveryId), eq(deliveries.userId, ctx.user.id)))
         .limit(1);
 
-      if (!existing.length) throw new TRPCError({ code: "NOT_FOUND", message: "Entrega não encontrada" });
+      if (!existing.length) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entrega não encontrada" });
+      }
 
       await db
         .update(deliveries)
