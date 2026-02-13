@@ -3,18 +3,18 @@ import { z } from "zod";
 import { router, adminOnlyProcedure } from "../_core/trpc";
 import { getDb } from "../db";
 import { users, deliveries, userGroups } from "../../drizzle/schema";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import {
-  hashPassword,
-  isValidLoginIdOrEmail,
-  isValidPassword,
-} from "../_core/password";
+import { hashPassword, isValidLoginIdOrEmail, isValidPassword } from "../_core/password";
 
 function requireAdminTenant(ctx: any) {
   if (!ctx.user) throw new TRPCError({ code: "UNAUTHORIZED", message: "UNAUTHED" });
+
+  // aqui é EXCLUSIVO para ADMIN (owner não usa esses endpoints)
   if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "ADMIN_ONLY" });
+
   if (!ctx.user.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: "Sem tenant" });
+
   return { tenantId: ctx.user.tenantId as number, adminId: ctx.user.id as number };
 }
 
@@ -37,11 +37,7 @@ export const usersRouter = router({
       const { tenantId, adminId } = requireAdminTenant(ctx);
 
       const q = input.q?.trim().toLowerCase();
-      const whereBase = and(
-        eq(users.tenantId, tenantId),
-        eq(users.role, "user"),
-        eq(users.createdByAdminId, adminId)
-      );
+      const whereBase = and(eq(users.tenantId, tenantId), eq(users.role, "user"), eq(users.createdByAdminId, adminId));
 
       const where =
         q && q.length
@@ -74,10 +70,7 @@ export const usersRouter = router({
         .limit(input.limit)
         .offset(input.offset);
 
-      const totalRows = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(users)
-        .where(where as any);
+      const totalRows = await db.select({ count: sql<number>`count(*)` }).from(users).where(where as any);
 
       return { data, total: Number(totalRows?.[0]?.count ?? 0) };
     }),
@@ -120,14 +113,10 @@ export const usersRouter = router({
       const existing = await db.select({ id: users.id }).from(users).where(eq(users.openId, openId)).limit(1);
       if (existing.length) throw new TRPCError({ code: "CONFLICT", message: "Usuário já existe" });
 
-      // email (se vier) - evita duplicar globalmente (opcional, mas bom)
+      // email duplicado (global) - mantenha se isso for regra do seu sistema
       if (input.email) {
         const email = input.email.trim().toLowerCase();
-        const emailDup = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.email, email))
-          .limit(1);
+        const emailDup = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
         if (emailDup.length) throw new TRPCError({ code: "CONFLICT", message: "Email já existe" });
       }
 
@@ -146,7 +135,8 @@ export const usersRouter = router({
           passwordHash: hashPassword(input.password),
           createdAt: now,
           updatedAt: now,
-          lastSignedIn: now, // pode manter
+          // ✅ não marcar como “logou”
+          // lastSignedIn: null (se aceitar) — se não aceitar, simplesmente não seta
         } as any)
         .returning({
           id: users.id,
@@ -182,14 +172,7 @@ export const usersRouter = router({
       const found = await db
         .select({ id: users.id })
         .from(users)
-        .where(
-          and(
-            eq(users.id, input.id),
-            eq(users.tenantId, tenantId),
-            eq(users.role, "user"),
-            eq(users.createdByAdminId, adminId)
-          )
-        )
+        .where(and(eq(users.id, input.id), eq(users.tenantId, tenantId), eq(users.role, "user"), eq(users.createdByAdminId, adminId)))
         .limit(1);
 
       if (!found.length) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado" });
@@ -234,12 +217,7 @@ export const usersRouter = router({
    * ADMIN: resetar senha do user (somente os criados por este admin)
    */
   resetPassword: adminOnlyProcedure
-    .input(
-      z.object({
-        id: z.number(),
-        newPassword: z.string().min(4).max(128),
-      })
-    )
+    .input(z.object({ id: z.number(), newPassword: z.string().min(4).max(128) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
@@ -256,22 +234,12 @@ export const usersRouter = router({
       const found = await db
         .select({ id: users.id })
         .from(users)
-        .where(
-          and(
-            eq(users.id, input.id),
-            eq(users.tenantId, tenantId),
-            eq(users.role, "user"),
-            eq(users.createdByAdminId, adminId)
-          )
-        )
+        .where(and(eq(users.id, input.id), eq(users.tenantId, tenantId), eq(users.role, "user"), eq(users.createdByAdminId, adminId)))
         .limit(1);
 
       if (!found.length) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado" });
 
-      await db
-        .update(users)
-        .set({ passwordHash: hashPassword(input.newPassword), updatedAt: new Date() })
-        .where(eq(users.id, input.id));
+      await db.update(users).set({ passwordHash: hashPassword(input.newPassword), updatedAt: new Date() }).where(eq(users.id, input.id));
 
       return { success: true };
     }),
@@ -290,19 +258,11 @@ export const usersRouter = router({
       const found = await db
         .select({ id: users.id })
         .from(users)
-        .where(
-          and(
-            eq(users.id, input.id),
-            eq(users.tenantId, tenantId),
-            eq(users.role, "user"),
-            eq(users.createdByAdminId, adminId)
-          )
-        )
+        .where(and(eq(users.id, input.id), eq(users.tenantId, tenantId), eq(users.role, "user"), eq(users.createdByAdminId, adminId)))
         .limit(1);
 
       if (!found.length) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado" });
 
-      // apaga vínculos
       await db.delete(userGroups).where(eq(userGroups.userId, input.id));
       await db.delete(deliveries).where(eq(deliveries.userId, input.id));
       await db.delete(users).where(eq(users.id, input.id));
@@ -313,25 +273,18 @@ export const usersRouter = router({
   /**
    * ADMIN: listar ids dos users (helper para UI selects)
    */
-  listIds: adminOnlyProcedure
-    .query(async ({ ctx }) => {
-      const db = await getDb();
-      if (!db) return { data: [] as { id: number; name: string | null; openId: string }[] };
+  listIds: adminOnlyProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { data: [] as { id: number; name: string | null; openId: string }[] };
 
-      const { tenantId, adminId } = requireAdminTenant(ctx);
+    const { tenantId, adminId } = requireAdminTenant(ctx);
 
-      const data = await db
-        .select({ id: users.id, name: users.name, openId: users.openId })
-        .from(users)
-        .where(
-          and(
-            eq(users.tenantId, tenantId),
-            eq(users.role, "user"),
-            eq(users.createdByAdminId, adminId)
-          )
-        )
-        .orderBy(sql`${users.id} DESC`);
+    const data = await db
+      .select({ id: users.id, name: users.name, openId: users.openId })
+      .from(users)
+      .where(and(eq(users.tenantId, tenantId), eq(users.role, "user"), eq(users.createdByAdminId, adminId)))
+      .orderBy(sql`${users.id} DESC`);
 
-      return { data };
-    }),
+    return { data };
+  }),
 });
