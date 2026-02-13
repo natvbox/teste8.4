@@ -1,163 +1,83 @@
-import React, { createContext, useCallback, useContext, useMemo } from "react";
+import React, { createContext, useContext, useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { TRPCClientError } from "@trpc/client";
-
-export type UserRole = "user" | "admin" | "owner";
-
-export interface UserData {
-  id: number;
-  openId: string;
-  name: string | null;
-  email: string | null;
-  role: UserRole;
-  tenantId: number | null;
-}
 
 interface AuthContextType {
-  userData: UserData | null;
-  loading: boolean;
-  isAuthenticated: boolean;
-
-  // flags
-  isAdmin: boolean;        // admin com tenant OU owner
+  userData: any;
+  isLoading: boolean;
   isOwner: boolean;
-  isUser: boolean;
-  isTenantAdmin: boolean;  // admin com tenant (somente)
-
-  login: (params: {
-    loginId: string;
-    password: string;
-    name?: string;
-    email?: string;
-  }) => Promise<void>;
+  isAdmin: boolean;
+  login: (loginId: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  refresh: () => Promise<void>;
+  refetch: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-function normalizeMe(data: unknown): UserData | null {
-  if (!data) return null;
-
-  // formato { user: ... }
-  if (typeof data === "object" && data !== null && "user" in data) {
-    const u = (data as any).user;
-    return u && typeof u === "object" ? (u as UserData) : null;
-  }
-
-  // formato user direto
-  if (typeof data === "object" && data !== null && "role" in data && "openId" in data) {
-    return data as UserData;
-  }
-
-  return null;
-}
+const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const utils = trpc.useUtils();
+  const [userData, setUserData] = useState<any>(null);
 
-  const meQuery = trpc.auth.me.useQuery(undefined, {
+  const sessionQuery = trpc.auth.me.useQuery(undefined, {
     retry: false,
-    refetchOnWindowFocus: false,
   });
 
-  const loginMutation = trpc.auth.login.useMutation({
-    onSuccess: async () => {
-      await utils.auth.me.invalidate();
-    },
-  });
+  const loginMutation = trpc.auth.login.useMutation();
+  const logoutMutation = trpc.auth.logout.useMutation();
 
-  const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: async () => {
-      await utils.auth.me.invalidate();
-    },
-  });
+  const isLoading =
+    sessionQuery.isLoading ||
+    loginMutation.isLoading ||
+    logoutMutation.isLoading;
 
-  const login = useCallback(
-    async ({
+  const isOwner = userData?.role === "owner";
+  const isAdmin = userData?.role === "admin";
+
+  useEffect(() => {
+    if (sessionQuery.data) {
+      setUserData(sessionQuery.data);
+    }
+  }, [sessionQuery.data]);
+
+  async function login(loginId: string, password: string) {
+    const result = await loginMutation.mutateAsync({
       loginId,
       password,
-      name,
-      email,
-    }: {
-      loginId: string;
-      password: string;
-      name?: string;
-      email?: string;
-    }) => {
-      const openId = loginId.trim().toLowerCase();
+    });
 
-      await loginMutation.mutateAsync({
-        loginId: openId,
-        password,
-        name: name?.trim() || undefined,
-        email: email?.trim().toLowerCase() || undefined,
-      });
-
-      await utils.auth.me.refetch();
-    },
-    [loginMutation, utils.auth.me]
-  );
-
-  const logout = useCallback(async () => {
-    try {
-      await logoutMutation.mutateAsync();
-    } catch (error: unknown) {
-      if (error instanceof TRPCClientError && error.data?.code === "UNAUTHORIZED") {
-        // já deslogado
-      } else {
-        throw error;
-      }
-    } finally {
-      utils.auth.me.setData(undefined, undefined);
-      await utils.auth.me.invalidate();
+    if (result?.success) {
+      await sessionQuery.refetch();
     }
-  }, [logoutMutation, utils.auth.me]);
+  }
 
-  const refresh = useCallback(async () => {
-    await meQuery.refetch();
-  }, [meQuery]);
+  async function logout() {
+    await logoutMutation.mutateAsync();
+    setUserData(null);
+  }
 
-  const userData = normalizeMe(meQuery.data);
+  async function refetch() {
+    await sessionQuery.refetch();
+  }
 
-  const value = useMemo<AuthContextType>(() => {
-    const role = userData?.role;
-    const tenantId = userData?.tenantId ?? null;
-
-    const isOwner = role === "owner";
-    const isTenantAdmin = role === "admin" && !!tenantId;
-
-    return {
-      userData,
-      loading: meQuery.isLoading || loginMutation.isPending || logoutMutation.isPending,
-      isAuthenticated: Boolean(userData),
-
-      // ✅ admin só se for owner OU admin com tenant
-      isAdmin: isOwner || isTenantAdmin,
-      isOwner,
-      isTenantAdmin,
-
-      isUser: role === "user",
-
-      login,
-      logout,
-      refresh,
-    };
-  }, [
-    userData,
-    meQuery.isLoading,
-    loginMutation.isPending,
-    logoutMutation.isPending,
-    login,
-    logout,
-    refresh,
-  ]);
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider
+      value={{
+        userData,
+        isLoading,
+        isOwner,
+        isAdmin,
+        login,
+        logout,
+        refetch,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
+  if (!ctx) {
+    throw new Error("useAuth deve ser usado dentro do AuthProvider");
+  }
   return ctx;
 }
