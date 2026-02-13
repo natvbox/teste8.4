@@ -10,10 +10,11 @@ import {
   isValidPassword,
   verifyPassword,
 } from "../_core/password";
-import { COOKIE_NAME } from "@shared/const";
 
 /**
- * Build cookie corretamente para Render (HTTPS)
+ * Cookie para Render/HTTPS:
+ * - Prod: Secure + SameSite=None
+ * - Dev: SameSite=Lax
  */
 function buildCookie(name: string, value: string, maxAgeSeconds: number) {
   const isProd = ENV.isProduction;
@@ -29,7 +30,6 @@ function buildCookie(name: string, value: string, maxAgeSeconds: number) {
   ];
 
   if (secure) parts.push("Secure");
-
   return parts.join("; ");
 }
 
@@ -47,14 +47,10 @@ function clearCookie(name: string) {
   ];
 
   if (secure) parts.push("Secure");
-
   return parts.join("; ");
 }
 
 export const authRouter = router({
-  /**
-   * Login local (SEM dependências externas)
-   */
   login: publicProcedure
     .input(
       z.object({
@@ -65,8 +61,8 @@ export const authRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // ✅ fonte única do cookie name (mesmo que o sdk lê)
-      const cookieName = COOKIE_NAME;
+      // ✅ fonte única (mesmo que o sdk lê)
+      const cookieName = ENV.sessionCookieName || "app_session_id";
 
       const openId = input.loginId.trim().toLowerCase();
 
@@ -88,10 +84,9 @@ export const authRouter = router({
       const existing = await getUserByOpenId(openId);
       const now = new Date();
 
-      // Se já existe e tem senha, validar
+      // ✅ se existe e tem hash: valida
       if (existing?.passwordHash) {
         const ok = verifyPassword(input.password, existing.passwordHash);
-
         if (!ok) {
           throw new TRPCError({
             code: "UNAUTHORIZED",
@@ -100,10 +95,17 @@ export const authRouter = router({
         }
       }
 
-      // Se não existir ou não tiver senha → define no primeiro login
-      const passwordHash = existing?.passwordHash
-        ? undefined
-        : hashPassword(input.password);
+      // 🛡️ se existe MAS não tem senha: não permitir “tomar conta” do usuário
+      if (existing && !existing.passwordHash) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Este usuário ainda não tem senha definida. Peça ao admin/owner para definir ou resetar a senha.",
+        });
+      }
+
+      // ✅ se não existe: cria com senha
+      const passwordHash = existing ? undefined : hashPassword(input.password);
 
       await upsertUser({
         openId,
@@ -114,22 +116,18 @@ export const authRouter = router({
         lastSignedIn: now,
       } as any);
 
-      const token = await sdk.createSessionToken(openId);
+      // ✅ alinhar duração do token com cookie (30 dias)
+      const maxAgeSeconds = 60 * 60 * 24 * 30;
+      const token = await sdk.createSessionToken(openId, {
+        expiresInMs: maxAgeSeconds * 1000,
+      });
 
-      const header = buildCookie(
-        cookieName,
-        token,
-        60 * 60 * 24 * 30 // 30 dias
-      );
-
-      ctx.res.setHeader("Set-Cookie", header);
-
+      ctx.res.setHeader("Set-Cookie", buildCookie(cookieName, token, maxAgeSeconds));
       return { success: true };
     }),
 
   logout: protectedProcedure.mutation(async ({ ctx }) => {
-    const cookieName = COOKIE_NAME;
-
+    const cookieName = ENV.sessionCookieName || "app_session_id";
     ctx.res.setHeader("Set-Cookie", clearCookie(cookieName));
     return { success: true };
   }),
