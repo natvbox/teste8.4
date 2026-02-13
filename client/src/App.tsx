@@ -4,7 +4,7 @@ import NotFound from "@/pages/NotFound";
 import { Redirect, Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { useAuth } from "./contexts/AuthContext";
 
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
@@ -29,7 +29,7 @@ function ProtectedRoute({
   requireAdmin?: boolean;
   requireUser?: boolean;
 }) {
-  const { loading, isAuthenticated, userData, isOwner } = useAuth();
+  const { loading, isAuthenticated, userData, isOwner, isAdmin, isUser } = useAuth();
 
   if (loading) {
     return (
@@ -44,8 +44,11 @@ function ProtectedRoute({
   }
 
   if (requireOwner && !isOwner) return <Redirect to="/dashboard" />;
-  if (requireAdmin && userData.role !== "admin" && userData.role !== "owner") return <Redirect to="/my-notifications" />;
-  if (requireUser && userData.role !== "user") return <Redirect to="/dashboard" />;
+
+  // ✅ usa flag do contexto (admin precisa ter tenant; owner passa)
+  if (requireAdmin && !isAdmin) return <Redirect to="/my-notifications" />;
+
+  if (requireUser && !isUser) return <Redirect to="/dashboard" />;
 
   return <Component />;
 }
@@ -55,54 +58,44 @@ export default function App() {
     <ErrorBoundary>
       <ThemeProvider>
         <TooltipProvider>
-          <AuthProvider>
-            <Switch>
-              <Route path="/login" component={Login} />
+          <Switch>
+            <Route path="/login" component={Login} />
 
-              {/* USER */}
-              <Route path="/my-notifications" component={() => (
-                <ProtectedRoute component={UserNotifications} requireUser />
-              )} />
+            {/* USER */}
+            <Route
+              path="/my-notifications"
+              component={() => <ProtectedRoute component={UserNotifications} requireUser />}
+            />
 
-              {/* ADMIN */}
-              <Route path="/dashboard" component={() => (
-                <ProtectedRoute component={Dashboard} requireAdmin />
-              )} />
-              <Route path="/users" component={() => (
-                <ProtectedRoute component={Users} requireAdmin />
-              )} />
-              <Route path="/groups" component={() => (
-                <ProtectedRoute component={Groups} requireAdmin />
-              )} />
-              <Route path="/notifications" component={() => (
-                <ProtectedRoute component={Notifications} requireAdmin />
-              )} />
-              <Route path="/schedule" component={() => (
-                <ProtectedRoute component={Schedule} requireAdmin />
-              )} />
-              <Route path="/history" component={() => (
-                <ProtectedRoute component={History} requireAdmin />
-              )} />
-              <Route path="/logs" component={() => (
-                <ProtectedRoute component={Logs} requireAdmin />
-              )} />
-              <Route path="/subscription" component={() => (
-                <ProtectedRoute component={Subscription} requireAdmin />
-              )} />
+            {/* ADMIN */}
+            <Route path="/dashboard" component={() => <ProtectedRoute component={Dashboard} requireAdmin />} />
+            <Route path="/users" component={() => <ProtectedRoute component={Users} requireAdmin />} />
+            <Route path="/groups" component={() => <ProtectedRoute component={Groups} requireAdmin />} />
+            <Route
+              path="/notifications"
+              component={() => <ProtectedRoute component={Notifications} requireAdmin />}
+            />
+            <Route path="/schedule" component={() => <ProtectedRoute component={Schedule} requireAdmin />} />
+            <Route path="/history" component={() => <ProtectedRoute component={History} requireAdmin />} />
+            <Route path="/logs" component={() => <ProtectedRoute component={Logs} requireAdmin />} />
 
-              {/* OWNER */}
-              <Route path="/superadmin" component={() => (
-                <ProtectedRoute component={SuperAdmin} requireOwner />
-              )} />
+            {/* Subscription é owner-only na sidebar, mas a rota pode ser admin também se quiser.
+                Se quiser travar só owner, troque requireAdmin por requireOwner. */}
+            <Route
+              path="/subscription"
+              component={() => <ProtectedRoute component={Subscription} requireAdmin />}
+            />
 
-              {/* Root redirect */}
-              <Route path="/" component={() => <Redirect to="/login" />} />
+            {/* OWNER */}
+            <Route path="/superadmin" component={() => <ProtectedRoute component={SuperAdmin} requireOwner />} />
 
-              <Route component={NotFound} />
-            </Switch>
+            {/* Root redirect */}
+            <Route path="/" component={() => <Redirect to="/login" />} />
 
-            <Toaster richColors />
-          </AuthProvider>
+            <Route component={NotFound} />
+          </Switch>
+
+          <Toaster richColors />
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
