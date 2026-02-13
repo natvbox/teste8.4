@@ -26,9 +26,10 @@ function requireUser(ctx: TrpcContext) {
 }
 
 export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
-  // garante que ctx.user existe
   requireUser(ctx);
-  return next({ ctx });
+  return next({
+    ctx, // mantém ctx tipado e consistente
+  });
 });
 
 export const adminOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
