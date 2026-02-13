@@ -23,7 +23,10 @@ function normalizeSlug(input: string) {
  */
 function requireTenantAdmin(ctx: any) {
   if (ctx.user?.role === "owner") {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Owner não usa tenantRouter para users (use superadmin)" });
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Owner não usa tenantRouter para users (use superadmin)",
+    });
   }
   const tenantId = ctx.user?.tenantId;
   if (!tenantId) {
@@ -320,4 +323,251 @@ export const tenantRouter = router({
         name: z.string().min(1).max(255),
         loginId: z.string().min(3).max(64),
         password: z.string().min(4).max(128),
-        email: z.string().
+        email: z.string().email().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco de dados não disponível" });
+
+      const tenantId = requireTenantAdmin(ctx);
+      const adminId = ctx.user.id;
+
+      const openId = input.loginId.trim().toLowerCase();
+
+      if (!isValidLoginIdOrEmail(openId)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Usuário inválido. Use um login (letras/números e ; . _ -) ou um e-mail válido",
+        });
+      }
+      if (!isValidPassword(input.password)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Senha inválida. Use apenas letras, números e ; . _ -",
+        });
+      }
+
+      const existing = await db.select({ id: users.id }).from(users).where(eq(users.openId, openId)).limit(1);
+      if (existing.length) throw new TRPCError({ code: "CONFLICT", message: "Usuário já existe" });
+
+      const created = await db
+        .insert(users)
+        .values({
+          tenantId,
+          createdByAdminId: adminId, // auditoria
+          openId,
+          name: input.name,
+          email: input.email ? input.email.trim().toLowerCase() : null,
+          role: "user",
+          loginMethod: "local",
+          passwordHash: hashPassword(input.password),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          lastSignedIn: new Date(),
+        } as any)
+        .returning();
+
+      return { success: true, user: created[0] };
+    }),
+
+  /**
+   * ADMIN: atualizar usuário do tenant (DECISÃO A: qualquer role=user do tenant)
+   */
+  updateUser: adminProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        name: z.string().min(1).max(255).optional(),
+        email: z.string().email().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco de dados não disponível" });
+
+      const tenantId = requireTenantAdmin(ctx);
+
+      const found = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, input.id), eq(users.tenantId, tenantId), eq(users.role, "user")))
+        .limit(1);
+
+      if (!found.length) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado" });
+
+      const patch: any = { updatedAt: new Date() };
+      if (input.name !== undefined) patch.name = input.name;
+      if (input.email !== undefined) patch.email = input.email.trim().toLowerCase();
+
+      const updated = await db.update(users).set(patch).where(eq(users.id, input.id)).returning();
+      return { success: true, user: updated[0] };
+    }),
+
+  /**
+   * ADMIN: remover usuário comum do tenant (DECISÃO A: qualquer role=user do tenant)
+   */
+  deleteUser: adminProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco de dados não disponível" });
+
+      const tenantId = requireTenantAdmin(ctx);
+
+      const found = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, input.id), eq(users.tenantId, tenantId), eq(users.role, "user")))
+        .limit(1);
+
+      if (!found.length) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado" });
+
+      await db.delete(userGroups).where(eq(userGroups.userId, input.id));
+      await db.delete(deliveries).where(eq(deliveries.userId, input.id));
+      await db.delete(users).where(eq(users.id, input.id));
+
+      return { success: true };
+    }),
+
+  /**
+   * ADMIN: listar grupos do usuário (para modal "Grupos" no Users)
+   */
+  getUserGroups: adminProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { groupIds: [] as number[] };
+
+      const tenantId = requireTenantAdmin(ctx);
+      const adminId = ctx.user.id;
+
+      // valida user no tenant e role=user
+      const u = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, input.id), eq(users.tenantId, tenantId), eq(users.role, "user")))
+        .limit(1);
+
+      if (!u.length) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado" });
+
+      // pega grupos do user, mas só retorna grupos que pertencem ao tenant do admin E criados pelo admin (mesma regra do groupsRouter)
+      const rows = await db
+        .select({ groupId: userGroups.groupId })
+        .from(userGroups)
+        .innerJoin(groups, eq(groups.id, userGroups.groupId))
+        .where(
+          and(
+            eq(userGroups.userId, input.id),
+            eq(groups.tenantId, tenantId),
+            eq(groups.createdByAdminId, adminId)
+          )
+        );
+
+      return { groupIds: rows.map((r) => r.groupId) };
+    }),
+
+  /**
+   * ADMIN: setar grupos do usuário (para modal "Grupos" no Users)
+   */
+  setUserGroups: adminProcedure
+    .input(
+      z.object({
+        userId: z.number(),
+        groupIds: z.array(z.number()).default([]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
+
+      const tenantId = requireTenantAdmin(ctx);
+      const adminId = ctx.user.id;
+
+      // valida user no tenant e role=user
+      const u = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, input.userId), eq(users.tenantId, tenantId), eq(users.role, "user")))
+        .limit(1);
+
+      if (!u.length) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado" });
+
+      // valida grupos do tenant do admin e criados pelo admin (igual groupsRouter)
+      if (input.groupIds.length) {
+        const validGroups = await db
+          .select({ id: groups.id })
+          .from(groups)
+          .where(
+            and(
+              eq(groups.tenantId, tenantId),
+              eq(groups.createdByAdminId, adminId),
+              inArray(groups.id, input.groupIds)
+            )
+          );
+
+        const validIds = new Set(validGroups.map((g) => g.id));
+        const bad = input.groupIds.filter((id) => !validIds.has(id));
+        if (bad.length) throw new TRPCError({ code: "BAD_REQUEST", message: "Grupos inválidos" });
+      }
+
+      await db.transaction(async (tx) => {
+        await tx.delete(userGroups).where(eq(userGroups.userId, input.userId));
+
+        if (input.groupIds.length) {
+          await tx.insert(userGroups).values(
+            input.groupIds.map((groupId) => ({
+              userId: input.userId,
+              groupId,
+              createdAt: new Date(),
+            }))
+          );
+        }
+      });
+
+      return { success: true };
+    }),
+
+  /**
+   * ADMIN: resetar senha de usuário do tenant (role=user)
+   */
+  resetUserPassword: adminProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        password: z.string().min(4).max(128),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB indisponível" });
+
+      const tenantId = requireTenantAdmin(ctx);
+
+      if (!isValidPassword(input.password)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Senha inválida. Use apenas letras, números e ; . _ -",
+        });
+      }
+
+      const found = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, input.id), eq(users.tenantId, tenantId), eq(users.role, "user")))
+        .limit(1);
+
+      if (!found.length) throw new TRPCError({ code: "NOT_FOUND", message: "Usuário não encontrado" });
+
+      await db
+        .update(users)
+        .set({
+          passwordHash: hashPassword(input.password),
+          loginMethod: "local",
+          updatedAt: new Date(),
+        } as any)
+        .where(eq(users.id, input.id));
+
+      return { success: true };
+    }),
+});
