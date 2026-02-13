@@ -87,8 +87,7 @@ export const uploadRouter = router({
       // tenant alvo:
       // - owner: deve informar tenantId
       // - admin/user: usa tenantId do ctx
-      const tenantId =
-        role === "owner" ? input.tenantId : requireTenantId(ctx);
+      const tenantId = role === "owner" ? input.tenantId : requireTenantId(ctx);
 
       if (!tenantId) {
         throw new TRPCError({
@@ -99,7 +98,9 @@ export const uploadRouter = router({
 
       const safeName = sanitizeFilename(input.filename);
       const providedExt = safeName.includes(".") ? safeName.split(".").pop() : null;
-      const ext = (providedExt && providedExt.length <= 8 ? providedExt : extFromMime(input.mimeType)).toLowerCase();
+      const ext = (
+        providedExt && providedExt.length <= 8 ? providedExt : extFromMime(input.mimeType)
+      ).toLowerCase();
 
       const ts = Date.now();
       const rand = Math.random().toString(36).slice(2, 10);
