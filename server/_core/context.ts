@@ -7,6 +7,9 @@ export type TrpcContext = {
   req: CreateExpressContextOptions["req"];
   res: CreateExpressContextOptions["res"];
   user: User | null;
+
+  // ✅ Ajuda debug/consistência (sem expor segredo)
+  sessionCookieName: string;
 };
 
 export async function createContext(
@@ -19,14 +22,26 @@ export async function createContext(
 
   if (hasCookieHeader) {
     try {
+      // ✅ O SDK deve usar ENV.sessionCookieName internamente para ler o cookie correto.
+      // Aqui mantemos o fluxo e evitamos quebrar compatibilidade.
       user = await sdk.authenticateRequest(opts.req);
     } catch (error) {
       user = null;
 
       // Log só em dev (não polui produção)
       if (!ENV.isProduction) {
-        console.warn("[Auth] Context auth failed:", String(error));
+        console.warn("[Auth] Context auth failed:", {
+          message: String(error),
+          hasCookieHeader: true,
+          sessionCookieName: ENV.sessionCookieName,
+        });
       }
+    }
+  } else {
+    if (!ENV.isProduction) {
+      // útil para entender requests sem cookie (assets, healthchecks, first load)
+      // sem poluir demais
+      // console.debug("[Auth] No cookie header on request");
     }
   }
 
@@ -34,5 +49,6 @@ export async function createContext(
     req: opts.req,
     res: opts.res,
     user,
+    sessionCookieName: ENV.sessionCookieName,
   };
 }
