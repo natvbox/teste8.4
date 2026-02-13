@@ -23,7 +23,8 @@ export default function Groups() {
   const usersQuery = trpc.tenant.listMyUsers.useQuery();
 
   const groups = groupsQuery.data?.data ?? [];
-  const users = usersQuery.data?.data ?? [];
+  // ✅ tenant.listMyUsers retorna array direto
+  const users = usersQuery.data ?? [];
 
   const [openCreate, setOpenCreate] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
@@ -58,12 +59,16 @@ export default function Groups() {
   });
 
   const [membersGroup, setMembersGroup] = useState<any | null>(null);
+
   const membersQuery = trpc.groups.getMembers.useQuery(
     { groupId: membersGroup?.id ?? 0 },
     { enabled: Boolean(membersGroup?.id) }
   );
 
-  const memberIds = useMemo(() => new Set<number>(membersQuery.data?.userIds ?? []), [membersQuery.data]);
+  const memberIds = useMemo(
+    () => new Set<number>(membersQuery.data?.userIds ?? []),
+    [membersQuery.data]
+  );
   const [memberDraft, setMemberDraft] = useState<number[]>([]);
 
   const setMembersMutation = trpc.groups.setMembers.useMutation({
@@ -120,12 +125,18 @@ export default function Groups() {
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (!form.name.trim()) return toast.error("Informe o nome");
-                  createMutation.mutate({ name: form.name.trim(), description: form.description.trim() || undefined });
+                  createMutation.mutate({
+                    name: form.name.trim(),
+                    description: form.description.trim() || undefined,
+                  });
                 }}
               >
                 <div className="space-y-2">
                   <Label>Nome</Label>
-                  <Input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
+                  <Input
+                    value={form.name}
+                    onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Descrição (opcional)</Label>
@@ -163,12 +174,19 @@ export default function Groups() {
                   <UsersIcon className="w-4 h-4" /> Membros
                 </Button>
 
-                <Dialog open={editing?.id === g.id} onOpenChange={(v) => (!v ? setEditing(null) : setEditing(g))}>
+                <Dialog
+                  open={editing?.id === g.id}
+                  onOpenChange={(v) => (!v ? setEditing(null) : setEditing(g))}
+                >
                   <DialogTrigger asChild>
-                    <Button variant="outline" className="gap-2" onClick={() => {
-                      setEditing(g);
-                      setForm({ name: g.name ?? "", description: g.description ?? "" });
-                    }}>
+                    <Button
+                      variant="outline"
+                      className="gap-2"
+                      onClick={() => {
+                        setEditing(g);
+                        setForm({ name: g.name ?? "", description: g.description ?? "" });
+                      }}
+                    >
                       <Edit2 className="w-4 h-4" /> Editar
                     </Button>
                   </DialogTrigger>
@@ -190,7 +208,10 @@ export default function Groups() {
                     >
                       <div className="space-y-2">
                         <Label>Nome</Label>
-                        <Input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
+                        <Input
+                          value={form.name}
+                          onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label>Descrição</Label>
@@ -239,21 +260,26 @@ export default function Groups() {
 
             <div className="mt-4 max-h-[55vh] overflow-auto rounded-xl border border-border">
               <div className="p-3 space-y-2">
-                {users.map((u: any) => (
-                  <label key={u.id} className="flex items-center gap-3 py-2">
-                    <Checkbox
-                      checked={effectiveDraft.has(u.id)}
-                      onCheckedChange={() => toggleMember(u.id)}
-                    />
-                    <div className="min-w-0">
-                      <div className="font-medium truncate">{u.name || u.email}</div>
-                      <div className="text-xs text-muted-foreground truncate">{u.email}</div>
-                    </div>
-                  </label>
-                ))}
-                {!users.length && !usersQuery.isLoading ? (
-                  <div className="p-6 text-center text-sm text-muted-foreground">Nenhum usuário no tenant.</div>
-                ) : null}
+                {membersQuery.isLoading ? (
+                  <div className="p-6 text-center text-sm text-muted-foreground">
+                    Carregando membros...
+                  </div>
+                ) : (
+                  <>
+                    {users.map((u: any) => (
+                      <label key={u.id} className="flex items-center gap-3 py-2">
+                        <Checkbox checked={effectiveDraft.has(u.id)} onCheckedChange={() => toggleMember(u.id)} />
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">{u.name || u.email || u.openId}</div>
+                          <div className="text-xs text-muted-foreground truncate">{u.email || u.openId}</div>
+                        </div>
+                      </label>
+                    ))}
+                    {!users.length && !usersQuery.isLoading ? (
+                      <div className="p-6 text-center text-sm text-muted-foreground">Nenhum usuário no tenant.</div>
+                    ) : null}
+                  </>
+                )}
               </div>
             </div>
 
