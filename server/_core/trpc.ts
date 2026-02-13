@@ -1,107 +1,59 @@
 import { initTRPC, TRPCError } from "@trpc/server";
-import type { Context } from "./context";
+import type { inferAsyncReturnType } from "@trpc/server";
+import superjson from "superjson";
 
-/**
- * Inicialização do tRPC
- * Aqui definimos:
- * - Contexto
- * - Middlewares
- * - Proteções de rota
- */
-const t = initTRPC.context<Context>().create();
+import { createContext } from "./context";
 
-/**
- * Router base
- */
+export type TrpcContext = inferAsyncReturnType<typeof createContext>;
+
+const t = initTRPC.context<TrpcContext>().create({
+  transformer: superjson,
+});
+
 export const router = t.router;
-
-/**
- * Procedures públicas
- */
 export const publicProcedure = t.procedure;
+export const createCallerFactory = t.createCallerFactory;
 
 /**
- * ============================
- * 🔐 AUTH MIDDLEWARE
- * ============================
+ * Fonte única de autenticação:
+ * - ctx.user (setado no createContext via sdk.authenticateRequest)
  */
-const isAuthed = t.middleware(({ ctx, next }) => {
-  if (!ctx.user) {
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "Não autenticado",
-    });
+function requireUser(ctx: TrpcContext) {
+  const user = ctx.user;
+  if (!user) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "Não autenticado" });
   }
+  return user;
+}
 
+export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+  const user = requireUser(ctx);
   return next({
-    ctx: {
-      ...ctx,
-      user: ctx.user,
-    },
+    ctx: { ...ctx, user }, // ✅ garante ctx.user sempre presente
   });
 });
 
-/**
- * ============================
- * 👤 PROTECTED
- * ============================
- */
-export const protectedProcedure = t.procedure.use(isAuthed);
+export const adminOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
+  const user = requireUser(ctx);
 
-/**
- * ============================
- * 🧑‍💼 ADMIN ONLY
- * ============================
- */
-const isAdmin = t.middleware(({ ctx, next }) => {
-  if (!ctx.user) {
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "Não autenticado",
-    });
+  // ✅ owner normalmente pode tudo que admin pode
+  if (user.role !== "admin" && user.role !== "owner") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Apenas admin/owner" });
   }
 
-  if (ctx.user.role !== "admin" && ctx.user.role !== "owner") {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Apenas admin ou owner",
-    });
-  }
-
-  return next();
+  return next({ ctx });
 });
 
-export const adminOnlyProcedure = t.procedure.use(isAdmin);
+export const ownerOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
+  const user = requireUser(ctx);
 
-/**
- * ============================
- * 👑 OWNER ONLY
- * ============================
- */
-const isOwner = t.middleware(({ ctx, next }) => {
-  if (!ctx.user) {
-    throw new TRPCError({
-      code: "UNAUTHORIZED",
-      message: "Não autenticado",
-    });
+  if (user.role !== "owner") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Apenas owner" });
   }
 
-  if (ctx.user.role !== "owner") {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Apenas owner",
-    });
-  }
-
-  return next();
+  return next({ ctx });
 });
 
-export const ownerOnlyProcedure = t.procedure.use(isOwner);
-
-/**
- * ============================
- * 🧠 ERROR FORMATTER
- * Evita erro: "Unable to transform response from server"
- * ============================
- */
-export const createCallerFactory = t.createCallerFactory;
+// Aliases de compatibilidade (seu projeto importa esses nomes)
+export const adminProcedure = adminOnlyProcedure;
+export const ownerProcedure = ownerOnlyProcedure;
