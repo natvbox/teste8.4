@@ -70,15 +70,22 @@ createRoot(document.getElementById("root")!).render(
   </trpc.Provider>
 );
 
-// Service Worker (PWA)
+/**
+ * ===========================
+ * PWA - Service Worker
+ * ===========================
+ * Só registra em produção.
+ * Garante que não quebre caso o arquivo não exista.
+ */
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
-  window.addEventListener("load", async () => {
-    try {
-      // Ajuste o caminho conforme seu SW real (ex: "/sw.js" ou "/service-worker.js")
-      await navigator.serviceWorker.register("/sw.js");
-      console.log("[PWA] Service Worker registrado com sucesso");
-    } catch (err) {
-      console.warn("[PWA] Falha ao registrar Service Worker:", err);
-    }
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then(() => {
+        console.log("[PWA] Service Worker registrado com sucesso");
+      })
+      .catch((err) => {
+        console.warn("[PWA] Falha ao registrar Service Worker:", err);
+      });
   });
 }
